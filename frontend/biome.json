@@ -1,0 +1,111 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.json",
+      "**/*.css",
+      "!**/routeTree.gen.ts"
+    ]
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 80
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "javascript": {
+    "jsxRuntime": "transparent",
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "es5",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [],
+  "linter": {
+    "enabled": true,
+    "domains": {
+      "react": "recommended",
+      "tailwind": "recommended"
+    },
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "warn",
+        "useJsxKeyInIterable": "warn",
+        "noUnusedImports": "warn"
+      },
+      "nursery": {
+        "useSortedClasses": {
+          "level": "warn",
+          "options": {
+            "functions": ["cn", "cva", "clsx", "cx"]
+          }
+        }
+      },
+      "suspicious": {
+        "noDebugger": "error",
+        "noExplicitAny": "warn",
+        "noRedeclare": "error",
+        "noShadowRestrictedNames": "warn",
+        "noDoubleEquals": "warn",
+        "noAssignInExpressions": "warn"
+      },
+      "complexity": {
+        "noUselessThisAlias": "off",
+        "noForEach": "off",
+        "useLiteralKeys": "off",
+        "useOptionalChain": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "warn",
+        "useImportType": "warn",
+        "noUnusedTemplateLiteral": "off",
+        "useDefaultParameterLast": "off",
+        "noParameterAssign": "off",
+        "useConst": "warn",
+        "useSingleVarDeclarator": "off",
+        "useTemplate": "off",
+        "noUselessElse": "off",
+        "useNumberNamespace": "off"
+      },
+      "a11y": {
+        "useKeyWithClickEvents": "off",
+        "useValidAnchor": "warn",
+        "useButtonType": "off",
+        "noSvgWithoutTitle": "off"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "error"
+      },
+      "performance": {
+        "noDelete": "warn"
+      }
+    }
+  }
+}
