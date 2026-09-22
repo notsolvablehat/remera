@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+
+export PATH="$HOME/.bun/bin:$PATH"
+
+empty_tree="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+frontend_changed=""
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    base="$empty_tree"
+  else
+    base="$remote_sha"
+  fi
+
+  diff=$(git diff --name-only "$base" "$local_sha" -- frontend)
+  [ -n "$diff" ] && frontend_changed="yes"
+done
+
+if [ -n "$frontend_changed" ]; then
+  echo "Running frontend checks..."
+  (cd frontend && bun run check && bun run typecheck) || exit 1
+fi

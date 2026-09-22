@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+
+export PATH="$HOME/.bun/bin:$PATH"
+
+FRONTEND_CHANGED=$(git diff --cached --name-only -- frontend)
+if [ -n "$FRONTEND_CHANGED" ]; then
+  echo "Running frontend checks..."
+  (cd frontend && bun run check && bun run typecheck) || exit 1
+fi
