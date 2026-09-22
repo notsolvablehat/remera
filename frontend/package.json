@@ -10,8 +10,7 @@
     "format": "biome format --write .",
     "check": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview",
-    "prepare": "husky"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -32,7 +31,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
-    "husky": "^9.1.7",
     "typescript": "~6",
     "vite": "^8"
   }
