@@ -26,3 +26,5 @@ utoipa = { version = "5.5.0", features = ["axum_extras"] }
 uuid = { version = "1.26.1", features = ["v7", "serde"] }
 validator = { version = "0.21.0", features = ["derive"] }
 dotenvy = "0.15.7"
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }

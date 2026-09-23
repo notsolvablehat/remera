@@ -1,12 +1,12 @@
 use std::fs::OpenOptions;
 
-use axum::Router;
 use std::net::SocketAddr;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{config::AppConfig, state::AppState};
+use crate::{config::AppConfig, router::build_router, state::AppState};
 
 mod config;
+mod router;
 mod routes;
 mod state;
 
@@ -63,10 +63,4 @@ fn init_tracing() {
             )
             .init();
     }
-}
-
-fn build_router(state: AppState) -> Router {
-    Router::new()
-        .merge(routes::health::router())
-        .with_state(state)
 }
