@@ -138,11 +138,11 @@ backend/
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.
-- **View access** is via a public share link/token — no login required.
+- **View access** is via 2 things. If the owner's container is private and adding new members with view access requires them to be logged in. Else, if the container is public, no auth required.
 - **Edit access** is an allow-list model: an owner adds a Gmail address
   to a container's allow-list; the grant resolves passively, whenever
   that email next signs up *or logs in* (not just signup — check both
-  paths when this gets built). No separate invite/accept click.
+  paths when this gets built). Invitation link will have some details regarding the owner and the person invited. Like, the owner's container id, the requested person's gmail, and their accessibility settiongs, like view only, edit etc. Once the user signs up, the frontend will send these details along with the other creds. Then the backend will resolve these extra headers to decide if the user is legit and is accessing only what is provided. 
 - **Owner-only lock** overrides every other role's access, including
   Edit, until the owner unlocks it.
 - Free-tier constraints shape several choices: R2 for storage (10 GB
@@ -152,7 +152,8 @@ backend/
 - Crate split follows a hexagonal shape: `domain` (pure logic) ←
   `storage`/`r2` (infra adapters) ← `api` (HTTP wiring). Dependencies
   only point inward.
-
+- Sharing link: This link will be a pre-signed crypto token with all necessary details. Suppose, the container is `x`, owner is `y`, invited person's gmail is `test@gmail.com` and the auth access to them is `view-only`. This data, as json, will be encrypted into a string, maybe using AES encryption. Then the link will be built like: `https://<domain>/invite/<bla-bla>. Frontend will take a note of this "bla-bla" and will redirect the user to signup page. After the user enters their creds, along with this "bla-bla" the creds will be passed to backend. This will be decrypted by backend and will map and match the creds + invite details and either allow or reject the user signup. 
+- From above, there will be two ways of signup. One only a normal signup, the other, invite only signup.
 ## Commands
 
 Run everything from `backend/`, never from inside a `crates/*` folder:
