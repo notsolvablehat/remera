@@ -43,5 +43,5 @@ if [ -n "$API_CHANGED" ]; then
 
   # Stage the regenerated client so it's included in this same commit —
   # otherwise the hook silently produces an uncommitted diff.
-  git add frontend/src/lib/api
+  git add .
 fi
