@@ -10,6 +10,6 @@ impl AppConfig {
             .and_then(|p| p.parse().ok())
             .unwrap_or(8080);
 
-        Self { port: port }
+        Self { port }
     }
 }
