@@ -140,6 +140,7 @@ dependencies = [
  "aws-sdk-s3",
  "axum",
  "better-auth",
+ "domain",
  "dotenvy",
  "jsonwebtoken 11.1.0",
  "moka",

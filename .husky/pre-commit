@@ -9,5 +9,5 @@ fi
 BACKEND_CHANGED=$(git diff --cached --name-only -- backend)
 if [ -n "$BACKEND_CHANGED" ]; then
   echo "Running backend checks..."
-  (cd backend && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings) || exit 1
+  (git add . && cd backend && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings) || exit 1
 fi
