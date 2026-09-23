@@ -11,3 +11,37 @@ if [ -n "$BACKEND_CHANGED" ]; then
   echo "Running backend checks..."
   (git add . && cd backend && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings) || exit 1
 fi
+
+API_CHANGED=$(git diff --cached --name-only -- backend/crates/api)
+if [ -n "$API_CHANGED" ]; then
+  echo "API changed — regenerating frontend client..."
+
+  (cd backend && cargo run &> /tmp/remera-api.log &)
+
+  # Poll until the server answers, instead of a fixed sleep — a fixed
+  # sleep is either too short (flaky) or too long (slows every commit).
+  for i in $(seq 1 30); do
+    if curl -s -o /dev/null http://localhost:8080/openapi.json; then
+      break
+    fi
+    sleep 1
+  done
+
+  if ! curl -s -o /dev/null http://localhost:8080/openapi.json; then
+    echo "Backend didn't come up in time — see /tmp/remera-api.log"
+    pkill -f "target/debug/api" 2>/dev/null
+    exit 1
+  fi
+
+  (cd frontend && bun run gen:api) || {
+    pkill -f "target/debug/api" 2>/dev/null
+    exit 1
+  }
+
+  # Kill the temporary server now that codegen is done.
+  pkill -f "target/debug/api" 2>/dev/null
+
+  # Stage the regenerated client so it's included in this same commit —
+  # otherwise the hook silently produces an uncommitted diff.
+  git add frontend/src/lib/api
+fi
