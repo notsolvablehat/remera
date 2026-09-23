@@ -11,6 +11,9 @@ shares college photos/videos in a "container" (one container = one
 group's archive). Full design context lives in the repo's `docs/`
 folder once that exists — this file is the fast-orientation version.
 
+This file covers `backend/` only. For the frontend (React/Vite client,
+API client generation, UI conventions), see `frontend/AGENTS.md`.
+
 ## Workspace layout (expected)
 
 ```
@@ -117,9 +120,29 @@ backend/
 
 **Built:**
 - Workspace skeleton (`api` binary, `domain` library)
-- `GET /healthz` — liveness check, no DB dependency
+- `GET /healthz` and `GET /` — liveness/root, no DB dependency, tagged
+  `Meta` in the OpenAPI spec
 - Basic `AppConfig` (currently just `PORT`) and `AppState` scaffolding
-- `tracing` initialized with `EnvFilter`
+- `tracing` initialized with `EnvFilter`, dev (stdout) vs. prod
+  (`app.log` file) split based on `APP_ENV`
+- OpenAPI spec generation via `utoipa` + `utoipa-axum`'s `OpenApiRouter`
+  (`api/src/router.rs`, `ApiDoc`) — routes and spec are registered
+  together via `routes!(...)`, no separate hand-maintained path list.
+  **Note:** `utoipa-axum` is pinned to `0.2` (not the latest `0.3`)
+  because `utoipa-swagger-ui` hasn't caught up to `utoipa 6.0` yet —
+  `0.3` pulls in `utoipa 6.0` and produces duplicate-crate-version
+  compile errors. Don't bump without checking `utoipa-swagger-ui`
+  compatibility first.
+- Swagger UI served at `/docs`, raw spec at `/openapi.json`
+- CORS via `tower-http`'s `CorsLayer`, hardcoded to allow
+  `http://localhost:5173` (the Vite dev server) — needs to become an
+  env-driven value through `AppConfig` once there's a real deployed
+  frontend origin, not just localhost
+- A pre-commit hook (`.husky/pre-commit`, repo root) regenerates the
+  frontend's API client whenever `backend/crates/api` changes — see
+  `frontend/AGENTS.md` for what it generates and where the output
+  lands; this file only needs to know the hook exists and boots this
+  service temporarily to read `/openapi.json` from it
 
 **Not yet built** (all decided in design discussion, none implemented):
 - `storage` crate (sqlx repos) and `r2` crate (presigned URLs) — folders
@@ -134,7 +157,6 @@ backend/
   every private route will use
 - moka role cache
 - Migrations (no `migrations/` folder yet)
-
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.
