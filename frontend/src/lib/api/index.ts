@@ -1,1 +1,1 @@
-export * from "./meta/meta";
+export * from './meta/meta';

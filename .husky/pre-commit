@@ -20,7 +20,7 @@ if [ -n "$API_CHANGED" ]; then
 
   # Poll until the server answers, instead of a fixed sleep — a fixed
   # sleep is either too short (flaky) or too long (slows every commit).
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if curl -s -o /dev/null http://localhost:8080/openapi.json; then
       break
     fi
