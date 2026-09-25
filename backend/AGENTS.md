@@ -9,7 +9,11 @@ and the conventions to keep so future changes don't fight past ones.
 A Rust backend for a private, invite-based app where a friend group
 shares college photos/videos in a "container" (one container = one
 group's archive). Full design context lives in the repo's `docs/`
-folder once that exists — this file is the fast-orientation version.
+folder — this file is the fast-orientation version. In particular,
+`docs/architecture/auth_layer_guide.md` is the file-by-file
+implementation guide for the auth layer described in "Current state"
+below; it's kept in sync with real `better-auth` crate behavior
+(including version-specific gotchas) as that work progresses.
 
 This file covers `backend/` only. For the frontend (React/Vite client,
 API client generation, UI conventions), see `frontend/AGENTS.md`.
@@ -27,9 +31,11 @@ backend/
 │   └── workflows/
 │       ├── ci.yml              # fmt, clippy, test
 │       └── deploy.yml          # build, push image, deploy
-├── migrations/                 # sqlx migrations, timestamped
-│   ├── 20260101000000_init.sql
-│   ├── 20260105000000_containers.sql
+├── migrations/                 # sqlx migrations, numbered (not timestamped —
+│   ├── 001_create_core_tables.sql        #   see "Current state" below)
+│   ├── 002_create_organization_tables.sql
+│   ├── 003_create_two_factor_auth_tables.sql
+│   ├── 004_create_container_tables.sql
 │   └── ...
 ├── crates/
 │   ├── api/                    # the axum binary — thin, wires everything together
@@ -122,7 +128,6 @@ backend/
 - Workspace skeleton (`api` binary, `domain` library)
 - `GET /healthz` and `GET /` — liveness/root, no DB dependency, tagged
   `Meta` in the OpenAPI spec
-- Basic `AppConfig` (currently just `PORT`) and `AppState` scaffolding
 - `tracing` initialized with `EnvFilter`, dev (stdout) vs. prod
   (`app.log` file) split based on `APP_ENV`
 - OpenAPI spec generation via `utoipa` + `utoipa-axum`'s `OpenApiRouter`
@@ -134,29 +139,72 @@ backend/
   compile errors. Don't bump without checking `utoipa-swagger-ui`
   compatibility first.
 - Swagger UI served at `/docs`, raw spec at `/openapi.json`
-- CORS via `tower-http`'s `CorsLayer`, hardcoded to allow
-  `http://localhost:5173` (the Vite dev server) — needs to become an
-  env-driven value through `AppConfig` once there's a real deployed
-  frontend origin, not just localhost
 - A pre-commit hook (`.husky/pre-commit`, repo root) regenerates the
   frontend's API client whenever `backend/crates/api` changes — see
   `frontend/AGENTS.md` for what it generates and where the output
   lands; this file only needs to know the hook exists and boots this
   service temporarily to read `/openapi.json` from it
+- Migrations: `backend/migrations/001-004` already exist and cover both
+  better-auth's own tables (`users`, `sessions`, `accounts`,
+  `verifications`, `organization`, `member`, `invitation`,
+  `two_factor`) and the domain tables (`container`, `container_member`,
+  `invite`). They use plain numbered filenames (`001_...`, `002_...`),
+  not sqlx's timestamp convention — keep any new migration in that same
+  numbered style; sqlx only needs the prefix to sort and be stable, but
+  mixing schemes on already-applied files would break the per-migration
+  checksum sqlx stores.
+
+**In progress — auth layer** (`better-auth` crate integration; see
+`docs/architecture/auth_layer_guide.md` for the file-by-file build
+order):
+- `AppConfig` now carries `database_url`, `auth_secret`, `base_url`,
+  `frontend_allow_origins: Vec<String>` (comma-separated
+  `FRONTEND_ALLOW_ORIGINS` env var — a list because one backend can
+  serve multiple frontends: prod, preview deploys, local dev — not a
+  single hardcoded origin).
+- `AppState` opens a `PgPool` and builds `Arc<BetterAuth<SqlxAdapter>>`
+  via `AuthBuilder` with `EmailPasswordPlugin` + `SessionManagementPlugin`.
+  CORS in `router.rs` is now built from `frontend_allow_origins`
+  instead of a hardcoded origin, and better-auth's own routes are
+  mounted at `/auth` via `.nest("/auth", state.auth.clone().axum_router())`.
+- Still missing: `ContainerAccess<Role>` extractor, `domain::Role`,
+  `routes/me.rs`, and the `extractors/` module wiring in `main.rs` —
+  the guide above has these in dependency order.
+- **Two version-specific traps in `better-auth 0.10.0` worth knowing
+  before touching this again:**
+  1. `HookedDatabaseAdapter<DB>` (the documented way to attach
+     `DatabaseHooks`, e.g. for invite-resolution-on-signup) does not
+     compile in this version — it implements every `*Ops` trait except
+     `PasskeyOps`, so it can never satisfy `DatabaseAdapter`'s full
+     bound. `AuthBuilder::hook(...)` also hard-errors at `.build()` if
+     used directly. Confirmed against the crate's own vendored source;
+     upstream's `master` branch has since removed
+     `HookedDatabaseAdapter` from `hooks.rs` entirely (there's a
+     `1.0.0-alpha.2` published after 0.10.0), so this was a known gap
+     that got reworked, not something to retry differently. Until the
+     crate is upgraded, `AppDb = SqlxAdapter` (unwrapped), and any
+     signup-time logic (like invite resolution) has to be called
+     explicitly from a custom signup endpoint instead of a
+     `DatabaseHooks` callback.
+  2. Custom `impl FromRequestParts<AppState>` extractors (`AuthUser`,
+     `MaybeUser`, `ContainerAccess<R>`) must **not** import
+     `axum::async_trait` or use `#[async_trait]` — that re-export
+     doesn't exist in `axum 0.8.9`; `FromRequestParts` is a native
+     `async fn`-returning trait now. (Unrelated: better-auth-core's own
+     `DatabaseHooks` trait *does* need the separate `async-trait` crate
+     — that one's a real dependency, add it to `api/Cargo.toml` if you
+     implement `DatabaseHooks`.)
 
 **Not yet built** (all decided in design discussion, none implemented):
 - `storage` crate (sqlx repos) and `r2` crate (presigned URLs) — folders
   don't exist yet; `Cargo.toml`'s `members = ["crates/*"]` will pick
   them up automatically once added, no workspace file change needed
 - Database connection / `GET /readyz`
-- Auth (better-auth.rs integration, session/JWT verification extractors)
 - Containers, invites/allow-list, members, media routes — see the
   route list and request-flow docs (if present in `docs/`) for the
   full planned surface
-- `ContainerAccess<Role>` extractor — the shared permission-check layer
-  every private route will use
-- moka role cache
-- Migrations (no `migrations/` folder yet)
+- moka role cache (planned addition to `AppState` + `ContainerAccess`,
+  once that extractor exists — see the auth guide's "revisit" section)
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.

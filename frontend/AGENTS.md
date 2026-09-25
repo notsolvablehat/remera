@@ -114,7 +114,14 @@ slow, that's why.
   UI state) — server state stays in Query's cache, not Zustand; see
   the design discussion in `backend/AGENTS.md` for the broader app
   shape this is built against
-- Auth UI (sign-up/login, invite-link landing page, allow-list flow)
+- Auth UI (sign-up/login, invite-link landing page, allow-list flow) —
+  depends on the backend's auth layer, currently in progress (see
+  `backend/AGENTS.md`'s "Current state" and
+  `docs/architecture/auth_layer_guide.md`). Once `/me` and better-auth's
+  `/auth/*` routes land, `bun run gen:api` will pick up a new `Auth` tag
+  and generate `src/lib/api/auth/` automatically — same tag-per-folder
+  convention as the existing `meta/`, no `orval.config.ts` changes
+  needed.
 - Container views, media grid/upload UI — depend on the corresponding
   backend routes existing first (see `backend/AGENTS.md`'s "Not yet
   built")
