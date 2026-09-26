@@ -121,3 +121,88 @@ pub async fn delete_object(client: &Client, bucket: &str, key: &str) -> Result<(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build_client;
+
+    // Presigning is pure local SigV4 computation — no HTTP request is
+    // ever sent — so these are safe, fast unit tests, not integration
+    // tests against a real bucket.
+    async fn test_client() -> Client {
+        build_client(
+            "https://example-account.r2.cloudflarestorage.com",
+            "dummy-access-key-id",
+            "dummy-secret-access-key",
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn presigned_put_url_embeds_bucket_key_and_a_signature() {
+        let client = test_client().await;
+
+        let url = presigned_put_url(
+            &client,
+            "my-bucket",
+            "c/some-container/some-media/orig",
+            "image/png",
+            Duration::from_secs(900),
+        )
+        .await
+        .expect("presigning with valid inputs should not fail");
+
+        assert!(url.contains("my-bucket"));
+        assert!(url.contains("c/some-container/some-media/orig"));
+        assert!(url.contains("X-Amz-Signature="));
+        assert!(url.contains("X-Amz-Expires=900"));
+    }
+
+    #[tokio::test]
+    async fn presigned_get_url_sets_content_disposition_for_the_download_filename() {
+        let client = test_client().await;
+
+        let url = presigned_get_url(
+            &client,
+            "my-bucket",
+            "c/some-container/some-media/orig",
+            "vacation photo.jpg",
+            Duration::from_secs(300),
+        )
+        .await
+        .expect("presigning with valid inputs should not fail");
+
+        assert!(url.contains("X-Amz-Signature="));
+        // Spaces get percent-encoded — check the encoded form, not the raw filename.
+        assert!(url.contains("response-content-disposition="));
+        assert!(url.contains("vacation%20photo.jpg") || url.contains("vacation+photo.jpg"));
+    }
+
+    #[tokio::test]
+    async fn presigned_urls_differ_between_put_and_get_for_the_same_key() {
+        let client = test_client().await;
+        let key = "c/some-container/some-media/orig";
+
+        let put_url = presigned_put_url(
+            &client,
+            "my-bucket",
+            key,
+            "image/png",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        let get_url = presigned_get_url(
+            &client,
+            "my-bucket",
+            key,
+            "file.png",
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(put_url, get_url);
+    }
+}

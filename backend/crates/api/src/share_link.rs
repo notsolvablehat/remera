@@ -96,3 +96,92 @@ impl ShareLinkCodec {
         Ok((payload.container_id, payload.share_link_id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_then_decode_round_trips() {
+        let codec = ShareLinkCodec::new("test-secret");
+        let container_id = Uuid::now_v7();
+        let share_link_id = Uuid::now_v7();
+
+        let token = codec.encode(container_id, share_link_id);
+        let (decoded_container_id, decoded_share_link_id) =
+            codec.decode(&token).expect("token should decode");
+
+        assert_eq!(decoded_container_id, container_id);
+        assert_eq!(decoded_share_link_id, share_link_id);
+    }
+
+    #[test]
+    fn two_tokens_for_the_same_payload_are_different_ciphertext() {
+        // AES-GCM uses a fresh random nonce every call — this is what
+        // makes GET .../share-link idempotent at the (container_id,
+        // share_link_id) level without ever returning the exact same
+        // token string twice (see backend/AGENTS.md's "Built — View
+        // share-link" notes).
+        let codec = ShareLinkCodec::new("test-secret");
+        let container_id = Uuid::now_v7();
+        let share_link_id = Uuid::now_v7();
+
+        let token_a = codec.encode(container_id, share_link_id);
+        let token_b = codec.encode(container_id, share_link_id);
+
+        assert_ne!(token_a, token_b);
+        assert_eq!(
+            codec.decode(&token_a).unwrap(),
+            codec.decode(&token_b).unwrap()
+        );
+    }
+
+    #[test]
+    fn decoding_with_a_different_secret_fails() {
+        let codec_a = ShareLinkCodec::new("secret-a");
+        let codec_b = ShareLinkCodec::new("secret-b");
+
+        let token = codec_a.encode(Uuid::now_v7(), Uuid::now_v7());
+
+        assert!(codec_b.decode(&token).is_err());
+    }
+
+    #[test]
+    fn decoding_a_tampered_token_fails() {
+        let codec = ShareLinkCodec::new("test-secret");
+        let token = codec.encode(Uuid::now_v7(), Uuid::now_v7());
+
+        let mut bytes = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF; // flip the last byte of the ciphertext/auth tag
+        let tampered = URL_SAFE_NO_PAD.encode(bytes);
+
+        assert!(codec.decode(&tampered).is_err());
+    }
+
+    #[test]
+    fn decoding_garbage_input_fails_without_panicking() {
+        let codec = ShareLinkCodec::new("test-secret");
+
+        assert!(codec.decode("").is_err());
+        assert!(codec.decode("not-valid-base64!!!").is_err());
+        assert!(codec.decode("YQ").is_err()); // valid base64, too short to contain a nonce
+    }
+
+    #[test]
+    fn rotating_the_share_link_id_invalidates_the_old_token() {
+        // Mirrors what routes/containers.rs's rotate handler relies on:
+        // decrypting still succeeds, but the embedded share_link_id no
+        // longer matches what's stored, so the caller rejects it.
+        let codec = ShareLinkCodec::new("test-secret");
+        let container_id = Uuid::now_v7();
+        let old_share_link_id = Uuid::now_v7();
+        let new_share_link_id = Uuid::now_v7();
+
+        let old_token = codec.encode(container_id, old_share_link_id);
+
+        let (decoded_container_id, decoded_share_link_id) = codec.decode(&old_token).unwrap();
+        assert_eq!(decoded_container_id, container_id);
+        assert_ne!(decoded_share_link_id, new_share_link_id);
+    }
+}

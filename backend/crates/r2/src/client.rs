@@ -25,3 +25,23 @@ pub async fn build_client(endpoint: &str, access_key_id: &str, secret_access_key
             .build(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // No network I/O here — explicit credentials/region mean `.load()`
+    // never needs to hit IMDS or any other provider, so this is safe to
+    // run as a plain unit test.
+    #[tokio::test]
+    async fn builds_a_client_from_explicit_credentials_without_panicking() {
+        let client = build_client(
+            "https://example-account.r2.cloudflarestorage.com",
+            "dummy-access-key-id",
+            "dummy-secret-access-key",
+        )
+        .await;
+
+        assert_eq!(client.config().region().map(|r| r.as_ref()), Some("auto"));
+    }
+}

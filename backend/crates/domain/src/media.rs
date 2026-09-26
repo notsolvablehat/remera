@@ -53,3 +53,35 @@ pub struct Media {
     pub size_bytes: i64,
     pub status: MediaStatus,
 }
+
+// Compile-time sanity check on the constants themselves: a single
+// upload shouldn't be allowed to exceed a brand-new container's entire
+// storage quota outright. A `#[test]` would just be asserting on two
+// `const`s, which clippy (rightly) flags as vacuous — this is checked
+// once, at compile time, instead.
+const _: () = assert!(MAX_UPLOAD_SIZE_BYTES < DEFAULT_STORAGE_LIMIT_BYTES);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_status_from_str_parses_known_values() {
+        assert_eq!("pending".parse::<MediaStatus>(), Ok(MediaStatus::Pending));
+        assert_eq!("ready".parse::<MediaStatus>(), Ok(MediaStatus::Ready));
+    }
+
+    #[test]
+    fn media_status_from_str_rejects_unknown_values() {
+        assert!("".parse::<MediaStatus>().is_err());
+        assert!("Ready".parse::<MediaStatus>().is_err()); // case-sensitive
+        assert!("uploading".parse::<MediaStatus>().is_err());
+    }
+
+    #[test]
+    fn media_status_as_str_round_trips_through_from_str() {
+        for status in [MediaStatus::Pending, MediaStatus::Ready] {
+            assert_eq!(status.as_str().parse::<MediaStatus>(), Ok(status));
+        }
+    }
+}
