@@ -4,6 +4,8 @@
 // types, or any other infra concern. `api` and `storage` depend
 // on this crate; this crate depends on nothing infra-related.
 
+pub mod container;
 pub mod errors;
 
+pub use container::{Role, role_meets_minimum};
 pub use errors::DomainError;

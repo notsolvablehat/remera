@@ -9,7 +9,8 @@ domain = { path = "../domain" }
 aws-config = "1.12.0"
 aws-sdk-s3 = "1.148.0"
 axum = "0.8.9"
-better-auth = "0.10.0"
+async-trait = "0.1"
+better-auth = { version = "0.10.0", features = ["axum", "sqlx-postgres"] }
 jsonwebtoken = "11.1.0"
 moka = { version = "0.12.16", features = ["future"] }
 serde = { version = "1.0.229", features = ["derive"] }

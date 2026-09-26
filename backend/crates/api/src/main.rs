@@ -6,6 +6,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use crate::{config::AppConfig, router::build_router, state::AppState};
 
 mod config;
+mod extractors;
 mod router;
 mod routes;
 mod state;
