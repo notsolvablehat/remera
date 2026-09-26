@@ -5,5 +5,13 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './authSessionDto';
+export * from './authUserDto';
+export * from './getSessionResponse';
 export * from './healthResponse';
 export * from './meResponse';
+export * from './signInEmailRequest';
+export * from './signInEmailResponse';
+export * from './signOutResponse';
+export * from './signUpEmailRequest';
+export * from './signUpEmailResponse';

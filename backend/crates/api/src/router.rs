@@ -7,7 +7,28 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
 #[derive(OpenApi)]
-#[openapi(info(title = "remera-api-docs", version = "0.1.0"))]
+#[openapi(
+    info(title = "remera-api-docs", version = "0.1.0"),
+    // These describe better-auth's own /auth/* routes for Swagger/orval —
+    // they aren't real routes themselves (see routes/auth.rs's module doc).
+    // The actual handling is the `.nest("/auth", auth_router)` call below.
+    paths(
+        routes::auth::sign_up_email,
+        routes::auth::sign_in_email,
+        routes::auth::sign_out,
+        routes::auth::get_session,
+    ),
+    components(schemas(
+        routes::auth::SignUpEmailRequest,
+        routes::auth::SignInEmailRequest,
+        routes::auth::SignUpEmailResponse,
+        routes::auth::SignInEmailResponse,
+        routes::auth::SignOutResponse,
+        routes::auth::GetSessionResponse,
+        routes::auth::AuthUserDto,
+        routes::auth::AuthSessionDto,
+    ))
+)]
 struct ApiDoc;
 
 pub fn build_router(state: AppState) -> Router {

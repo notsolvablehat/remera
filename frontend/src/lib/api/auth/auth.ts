@@ -5,7 +5,13 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
-  MeResponse
+  GetSessionResponse,
+  MeResponse,
+  SignInEmailRequest,
+  SignInEmailResponse,
+  SignOutResponse,
+  SignUpEmailRequest,
+  SignUpEmailResponse
 } from '../models';
 
 import { customInstance } from '../../axios-instance';
@@ -13,7 +19,43 @@ import { customInstance } from '../../axios-instance';
 
 
   export const getAuth = () => {
-const getMe = (
+const getSession = (
+
+ ) => {
+      return customInstance<GetSessionResponse>(
+      {url: `/auth/get-session`, method: 'GET'
+    },
+      );
+    }
+  const signInEmail = (
+    signInEmailRequest: SignInEmailRequest,
+ ) => {
+      return customInstance<SignInEmailResponse>(
+      {url: `/auth/sign-in/email`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: signInEmailRequest
+    },
+      );
+    }
+  const signOut = (
+
+ ) => {
+      return customInstance<SignOutResponse>(
+      {url: `/auth/sign-out`, method: 'POST'
+    },
+      );
+    }
+  const signUpEmail = (
+    signUpEmailRequest: SignUpEmailRequest,
+ ) => {
+      return customInstance<SignUpEmailResponse>(
+      {url: `/auth/sign-up/email`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: signUpEmailRequest
+    },
+      );
+    }
+  const getMe = (
 
  ) => {
       return customInstance<MeResponse>(
@@ -21,5 +63,9 @@ const getMe = (
     },
       );
     }
-  return {getMe}};
+  return {getSession,signInEmail,signOut,signUpEmail,getMe}};
+export type GetSessionResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getAuth>['getSession']>>>
+export type SignInEmailResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getAuth>['signInEmail']>>>
+export type SignOutResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getAuth>['signOut']>>>
+export type SignUpEmailResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getAuth>['signUpEmail']>>>
 export type GetMeResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getAuth>['getMe']>>>
