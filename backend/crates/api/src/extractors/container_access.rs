@@ -28,6 +28,48 @@ struct ContainerPath {
     container_id: Uuid,
 }
 
+/// Cached alongside (but separately from) the per-user role cache —
+/// locked/deleted are properties of the *container*, not of a
+/// particular membership, so one cache entry per container (not per
+/// (container, user) pair) covers every caller.
+#[derive(Debug, Clone, Copy)]
+pub struct ContainerStatus {
+    pub is_locked: bool,
+    pub is_deleted: bool,
+}
+
+async fn get_container_status(
+    state: &AppState,
+    container_id: Uuid,
+) -> Result<Option<ContainerStatus>, sqlx::Error> {
+    if let Some(status) = state.container_status_cache.get(&container_id).await {
+        return Ok(Some(status));
+    }
+
+    let row = sqlx::query!(
+        "select is_locked, deleted_at from container where id = $1",
+        container_id
+    )
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let status = ContainerStatus {
+        is_locked: row.is_locked,
+        is_deleted: row.deleted_at.is_some(),
+    };
+
+    state
+        .container_status_cache
+        .insert(container_id, status)
+        .await;
+
+    Ok(Some(status))
+}
+
 // Stamps out one FromRequestParts impl per role marker instead of
 // hand-writing the same lookup three times.
 macro_rules! impl_container_access {
@@ -59,7 +101,7 @@ macro_rules! impl_container_access {
                     .await;
 
                 let member_role = if let Some(role) = cached {
-                    role
+                    Some(role)
                 } else {
                     let row = sqlx::query!(
                         "select role from container_member where container_id = $1 and user_id = $2",
@@ -76,22 +118,62 @@ macro_rules! impl_container_access {
                             .into_response()
                     })?;
 
-                    let role = row
-                        .and_then(|r| r.role.parse::<Role>().ok())
-                        .ok_or_else(|| {
-                            (
-                                StatusCode::FORBIDDEN,
-                                Json(serde_json::json!({"error": "forbidden"})),
-                            )
-                                .into_response()
-                        })?;
+                    let role = row.and_then(|r| r.role.parse::<Role>().ok());
 
-                    state
-                        .cache
-                        .insert((container_id, user.id.clone()), role)
-                        .await;
+                    if let Some(role) = role {
+                        state
+                            .cache
+                            .insert((container_id, user.id.clone()), role)
+                            .await;
+                    }
 
                     role
+                };
+
+                // Locked/deleted checks come before the "are you even a
+                // member" check, matching the order in
+                // docs/architecture/howisthebackendstructured-1.md's
+                // request-flow traces — a locked container blocks
+                // everyone (including non-members) except its owner.
+                let status = get_container_status(state, container_id)
+                    .await
+                    .map_err(|_| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "db error"})),
+                        )
+                            .into_response()
+                    })?
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::NOT_FOUND,
+                            Json(serde_json::json!({"error": "not_found"})),
+                        )
+                            .into_response()
+                    })?;
+
+                if status.is_deleted {
+                    return Err((
+                        StatusCode::NOT_FOUND,
+                        Json(serde_json::json!({"error": "not_found"})),
+                    )
+                        .into_response());
+                }
+
+                if status.is_locked && member_role != Some(Role::Owner) {
+                    return Err((
+                        StatusCode::LOCKED,
+                        Json(serde_json::json!({"error": "container_locked"})),
+                    )
+                        .into_response());
+                }
+
+                let Some(member_role) = member_role else {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "forbidden"})),
+                    )
+                        .into_response());
                 };
 
                 if !role_meets_minimum(member_role, $min_role) {

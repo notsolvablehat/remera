@@ -7,7 +7,7 @@ use better_auth::{
 };
 use sqlx::PgPool;
 
-use crate::config::AppConfig;
+use crate::{config::AppConfig, extractors::container_access::ContainerStatus};
 
 // NOTE: this was originally going to be HookedDatabaseAdapter<SqlxAdapter>
 // so AppAuthHooks (invite resolution on signup) could run via better-auth's
@@ -29,6 +29,7 @@ pub struct AppState {
     pub db: PgPool,
     pub auth: Arc<BetterAuth<AppDb>>,
     pub cache: Arc<moka::future::Cache<(uuid::Uuid, String), domain::Role>>,
+    pub container_status_cache: Arc<moka::future::Cache<uuid::Uuid, ContainerStatus>>,
     pub r2: r2::Client,
     pub r2_bucket: String,
 }
@@ -62,6 +63,13 @@ impl AppState {
                 .build(),
         );
 
+        let container_status_cache = Arc::new(
+            moka::future::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(std::time::Duration::from_secs(300))
+                .build(),
+        );
+
         let r2 = r2::build_client(
             &config.s3_endpoint,
             &config.r2_access_key_id,
@@ -75,6 +83,7 @@ impl AppState {
             auth,
             db,
             cache,
+            container_status_cache,
             r2,
             r2_bucket,
         }

@@ -24,7 +24,7 @@ pub async fn create_with_owner(
     // concurrent creates from the *same* owner racing past this count
     // is an acceptable, narrow edge case for a soft quota like this one.
     let owned: i64 = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM container WHERE owner_id = $1",
+        "SELECT COUNT(*) FROM container WHERE owner_id = $1 AND deleted_at IS NULL",
         owner_id
     )
     .fetch_one(&mut *tx)
@@ -59,7 +59,8 @@ pub async fn create_with_owner(
 
 pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Container>, sqlx::Error> {
     let row = sqlx::query!(
-        "SELECT id, owner_id, name, is_public, is_locked FROM container WHERE id = $1",
+        "SELECT id, owner_id, name, is_public, is_locked
+         FROM container WHERE id = $1 AND deleted_at IS NULL",
         id
     )
     .fetch_optional(pool)
@@ -87,7 +88,7 @@ pub async fn list_for_user(
         "SELECT c.id, c.owner_id, c.name, c.is_public, c.is_locked, m.role
          FROM container c
          JOIN container_member m ON m.container_id = c.id
-         WHERE m.user_id = $1
+         WHERE m.user_id = $1 AND c.deleted_at IS NULL
          ORDER BY c.created_at DESC",
         user_id
     )
@@ -110,4 +111,92 @@ pub async fn list_for_user(
             })
         })
         .collect())
+}
+
+/// Updates name/storage_limit/media_limit. `None` leaves a field
+/// unchanged. Caller (the route handler) is responsible for requiring at
+/// least one field to be set — this will happily run a no-op update
+/// otherwise.
+pub async fn update_metadata(
+    pool: &PgPool,
+    id: Uuid,
+    name: Option<&str>,
+    storage_limit_bytes: Option<i64>,
+    media_limit: Option<i32>,
+) -> Result<Option<Container>, sqlx::Error> {
+    let row = sqlx::query!(
+        "UPDATE container
+         SET name = COALESCE($2, name),
+             storage_limit = COALESCE($3, storage_limit),
+             media_limit = COALESCE($4, media_limit)
+         WHERE id = $1 AND deleted_at IS NULL
+         RETURNING id, owner_id, name, is_public, is_locked",
+        id,
+        name,
+        storage_limit_bytes,
+        media_limit
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| Container {
+        id: r.id,
+        owner_id: r.owner_id,
+        name: r.name,
+        is_public: r.is_public,
+        is_locked: r.is_locked,
+    }))
+}
+
+pub async fn set_locked(pool: &PgPool, id: Uuid, locked: bool) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query!(
+        "UPDATE container SET is_locked = $2 WHERE id = $1 AND deleted_at IS NULL",
+        id,
+        locked
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Soft-delete only — sets `deleted_at`, doesn't touch R2 objects or
+/// remove rows. Purging is a background-job concern, not implemented yet.
+pub async fn soft_delete(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query!(
+        "UPDATE container SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+        id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub struct ContainerUsage {
+    pub storage_bytes: i64,
+    pub storage_limit: i64,
+    pub media_count: i32,
+    pub media_limit: i32,
+    pub member_count: i64,
+}
+
+pub async fn get_usage(pool: &PgPool, id: Uuid) -> Result<Option<ContainerUsage>, sqlx::Error> {
+    let row = sqlx::query!(
+        "SELECT c.storage_bytes, c.storage_limit, c.media_count, c.media_limit,
+                (SELECT COUNT(*) FROM container_member cm WHERE cm.container_id = c.id) AS member_count
+         FROM container c
+         WHERE c.id = $1 AND c.deleted_at IS NULL",
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| ContainerUsage {
+        storage_bytes: r.storage_bytes,
+        storage_limit: r.storage_limit,
+        media_count: r.media_count,
+        media_limit: r.media_limit,
+        member_count: r.member_count.unwrap_or(0),
+    }))
 }

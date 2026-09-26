@@ -7,7 +7,10 @@
 import type {
   ContainerDto,
   ContainerListResponse,
-  CreateContainerRequest
+  ContainerUsageResponse,
+  CreateContainerRequest,
+  SetLockRequest,
+  UpdateContainerRequest
 } from '../models';
 
 import { customInstance } from '../../axios-instance';
@@ -41,7 +44,49 @@ const listContainers = (
     },
       );
     }
-  return {listContainers,createContainer,getContainer}};
+  const deleteContainer = (
+    containerId: string,
+ ) => {
+      return customInstance<void>(
+      {url: `/containers/${containerId}`, method: 'DELETE'
+    },
+      );
+    }
+  const updateContainer = (
+    containerId: string,
+    updateContainerRequest: UpdateContainerRequest,
+ ) => {
+      return customInstance<ContainerDto>(
+      {url: `/containers/${containerId}`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: updateContainerRequest
+    },
+      );
+    }
+  const setContainerLock = (
+    containerId: string,
+    setLockRequest: SetLockRequest,
+ ) => {
+      return customInstance<void>(
+      {url: `/containers/${containerId}/lock`, method: 'PUT',
+      headers: {'Content-Type': 'application/json', },
+      data: setLockRequest
+    },
+      );
+    }
+  const getContainerUsage = (
+    containerId: string,
+ ) => {
+      return customInstance<ContainerUsageResponse>(
+      {url: `/containers/${containerId}/usage`, method: 'GET'
+    },
+      );
+    }
+  return {listContainers,createContainer,getContainer,deleteContainer,updateContainer,setContainerLock,getContainerUsage}};
 export type ListContainersResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['listContainers']>>>
 export type CreateContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['createContainer']>>>
 export type GetContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['getContainer']>>>
+export type DeleteContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['deleteContainer']>>>
+export type UpdateContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['updateContainer']>>>
+export type SetContainerLockResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['setContainerLock']>>>
+export type GetContainerUsageResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['getContainerUsage']>>>

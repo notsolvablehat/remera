@@ -15,7 +15,7 @@ use validator::Validate;
 use crate::{
     extractors::{
         auth_user::AuthUser,
-        container_access::{ContainerAccess, Viewer},
+        container_access::{ContainerAccess, ContainerStatus, Owner, Viewer},
     },
     state::AppState,
 };
@@ -78,6 +78,16 @@ async fn create_container(
                 .cache
                 .insert((container.id, user.id.clone()), Role::Owner)
                 .await;
+            state
+                .container_status_cache
+                .insert(
+                    container.id,
+                    ContainerStatus {
+                        is_locked: false,
+                        is_deleted: false,
+                    },
+                )
+                .await;
 
             (
                 StatusCode::CREATED,
@@ -137,6 +147,7 @@ async fn list_containers(
         (status = 200, description = "Container metadata", body = ContainerDto),
         (status = 403, description = "Not a member"),
         (status = 404, description = "Container not found"),
+        (status = 423, description = "Container is locked (non-owner)"),
     )
 )]
 async fn get_container(
@@ -162,9 +173,192 @@ async fn get_container(
     }
 }
 
+#[derive(Deserialize, Validate, ToSchema)]
+pub struct UpdateContainerRequest {
+    #[validate(length(min = 1, max = 200))]
+    pub name: Option<String>,
+    #[validate(range(min = 1))]
+    pub storage_limit_bytes: Option<i64>,
+    #[validate(range(min = 1))]
+    pub media_limit: Option<i32>,
+}
+
+#[utoipa::path(
+    patch,
+    path = "/containers/{container_id}",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    request_body = UpdateContainerRequest,
+    responses(
+        (status = 200, description = "Updated", body = ContainerDto),
+        (status = 400, description = "Invalid request, or no fields to update"),
+        (status = 403, description = "Not the owner"),
+        (status = 404, description = "Container not found"),
+    )
+)]
+async fn update_container(
+    access: ContainerAccess<Owner>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+    Json(body): Json<UpdateContainerRequest>,
+) -> axum::response::Response {
+    let no_fields =
+        body.name.is_none() && body.storage_limit_bytes.is_none() && body.media_limit.is_none();
+    if body.validate().is_err() || no_fields {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid_request"})),
+        )
+            .into_response();
+    }
+
+    match containers_repo::update_metadata(
+        &state.db,
+        container_id,
+        body.name.as_deref(),
+        body.storage_limit_bytes,
+        body.media_limit,
+    )
+    .await
+    {
+        Ok(Some(container)) => Json(ContainerDto {
+            id: container.id,
+            name: container.name,
+            is_public: container.is_public,
+            is_locked: container.is_locked,
+            role: access.role.as_str().to_string(),
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SetLockRequest {
+    pub locked: bool,
+}
+
+#[utoipa::path(
+    put,
+    path = "/containers/{container_id}/lock",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    request_body = SetLockRequest,
+    responses(
+        (status = 200, description = "Lock state updated"),
+        (status = 403, description = "Not the owner"),
+        (status = 404, description = "Container not found"),
+    )
+)]
+async fn set_container_lock(
+    _access: ContainerAccess<Owner>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+    Json(body): Json<SetLockRequest>,
+) -> axum::response::Response {
+    match containers_repo::set_locked(&state.db, container_id, body.locked).await {
+        Ok(true) => {
+            // Invalidate immediately — otherwise anyone with a live cache
+            // entry could keep acting on the stale lock state for up to
+            // the cache's TTL (see extractors/container_access.rs).
+            state.container_status_cache.invalidate(&container_id).await;
+            StatusCode::OK.into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/containers/{container_id}",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    responses(
+        (status = 204, description = "Soft-deleted"),
+        (status = 403, description = "Not the owner"),
+        (status = 404, description = "Container not found"),
+    )
+)]
+async fn delete_container(
+    _access: ContainerAccess<Owner>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+) -> axum::response::Response {
+    match containers_repo::soft_delete(&state.db, container_id).await {
+        Ok(true) => {
+            state.container_status_cache.invalidate(&container_id).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ContainerUsageResponse {
+    pub storage_bytes: i64,
+    pub storage_limit: i64,
+    pub media_count: i32,
+    pub media_limit: i32,
+    pub member_count: i64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/containers/{container_id}/usage",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    responses(
+        (status = 200, description = "Storage/media/member usage", body = ContainerUsageResponse),
+        (status = 403, description = "Not a member"),
+        (status = 404, description = "Container not found"),
+        (status = 423, description = "Container is locked (non-owner)"),
+    )
+)]
+async fn get_container_usage(
+    _access: ContainerAccess<Viewer>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+) -> axum::response::Response {
+    match containers_repo::get_usage(&state.db, container_id).await {
+        Ok(Some(usage)) => Json(ContainerUsageResponse {
+            storage_bytes: usage.storage_bytes,
+            storage_limit: usage.storage_limit,
+            media_count: usage.media_count,
+            media_limit: usage.media_limit,
+            member_count: usage.member_count,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(create_container))
         .routes(routes!(list_containers))
         .routes(routes!(get_container))
+        .routes(routes!(update_container))
+        .routes(routes!(delete_container))
+        .routes(routes!(set_container_lock))
+        .routes(routes!(get_container_usage))
 }

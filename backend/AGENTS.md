@@ -391,29 +391,71 @@ built; kept here only so nobody re-reads it as current):
   waited for one token to replenish and a request succeeded again;
   confirmed normal single-request traffic (signup, etc.) is unaffected.
 
+**Built — container locking, PATCH/DELETE, usage:**
+- Migration `008_add_container_deleted_at.sql` — adds `deleted_at` for
+  soft-delete. `containers_repo`'s `get_by_id`/`list_for_user`/the
+  owned-container quota count all now filter `deleted_at IS NULL`, so a
+  soft-deleted container disappears from every read path without an
+  actual `DELETE` statement anywhere yet (purging R2 objects + hard
+  delete is still a background-job concern, not implemented).
+- `extractors/container_access.rs` gained a **second** cache,
+  `AppState.container_status_cache: Cache<Uuid, ContainerStatus>`
+  (`{is_locked, is_deleted}`) — deliberately separate from the existing
+  per-`(container, user)` role cache, since locked/deleted are
+  properties of the container, not of a membership. `ContainerAccess`
+  now checks this on every request, in the order the flow docs specify:
+  deleted → `404` (unconditional, even for the owner) before locked →
+  `423` (skipped only if the caller's role is `Owner`) before the
+  existing "not a member" → `403` / role-too-low → `403` checks. This
+  is a **shared extractor**, so lock enforcement is automatically live
+  on every route that already used `ContainerAccess<Role>` — including
+  the media routes from the previous session, which previously had a
+  documented gap here ("uploads/deletes don't check `is_locked`" — that
+  gap is now closed as a side effect, not a separate media-specific fix).
+- `storage::containers_repo` gained `update_metadata` (`COALESCE`-based
+  patch, same pattern as `media_repo::update_metadata`), `set_locked`,
+  `soft_delete`, and `get_usage` (storage/media counts + a
+  `container_member` count subquery).
+- `routes/containers.rs`: `PATCH /containers/{cid}` (name/
+  storage_limit_bytes/media_limit, at least one required),
+  `PUT /containers/{cid}/lock` (`{ locked: bool }`), `DELETE
+  /containers/{cid}` (soft-delete), `GET /containers/{cid}/usage`. Lock
+  and delete both explicitly invalidate `container_status_cache` after
+  writing, same reasoning as the role-cache invalidation in
+  `routes/invites.rs`'s allow-list revoke — otherwise a cached entry
+  could serve stale access for up to the cache's TTL.
+- Verified live end-to-end: locked a container as owner, confirmed an
+  editor got `423` on both `GET /containers/{cid}` *and*
+  `POST .../uploads` (proving the shared-extractor claim above), owner
+  retained full access throughout including `PATCH` while locked,
+  unlock restored editor access immediately (no stale window),
+  `GET .../usage` reflected `PATCH`-updated limits and correct
+  `member_count`; soft-deleted a container and confirmed every role
+  (owner *and* editor) gets a uniform `404` — not `403`/`423` — and a
+  repeated `DELETE` is idempotent (`404`, not `500`); confirmed a
+  soft-deleted container no longer counts against the 5-owned-container
+  quota.
+- Frontend client regenerated — `containers.ts` picked up the three new
+  endpoints and their models.
+
 **Next up — in priority order** (see
 `docs/architecture/howisthebackendstructured-1.md` for full route
 specs and request-flow traces for all of these):
 
-1. **Container locking** — `container.is_locked` exists in the schema
-   but nothing checks it anywhere yet (not `ContainerAccess`, not the
-   media routes above). A locked container currently doesn't actually
-   block anyone. Also still missing: `PATCH/DELETE /containers/{cid}`,
-   `PUT .../lock`, `GET .../usage`.
-2. **Members** — list members, change a member's role, remove/leave,
+1. **Members** — list members, change a member's role, remove/leave,
    `transfer-ownership`. Without transfer-ownership, an owner can never
    leave their own container (the "last owner can't leave" rule
    mentioned in the hard rules has no code yet either).
-3. **View share-link** ("the other half of invite") — AES-GCM token,
+2. **View share-link** ("the other half of invite") — AES-GCM token,
    public `GET /invites/{token}` landing page, `GET/POST
    .../share-link[/rotate]`. Deliberately deferred when this session
    scoped the invite work down to allow-list-only. The existing
    `invite` DB table (token/accepted_at/expires_at) is reserved for
    this, not the allow-list — don't repurpose it.
-4. **Media follow-ups** — multipart upload for large files, bulk-delete,
+3. **Media follow-ups** — multipart upload for large files, bulk-delete,
    media dimensions. See "Built — media" above for exactly what's
    missing.
-5. **Operational readiness**:
+4. **Operational readiness**:
    - `GET /readyz` (DB-ping readiness probe) — doesn't exist; nothing
      currently tells an orchestrator when it's safe to route traffic.
    - Per-route rate-limit tuning — one flat global limit exists now
@@ -431,7 +473,7 @@ specs and request-flow traces for all of these):
      now that allow-list resolution lives in `auth_user.rs` instead —
      worth deleting so it doesn't look load-bearing to a future reader,
      but confirm with whoever's driving before removing it.
-6. **Deployment** — `Dockerfile`, `docker-compose.yml`,
+5. **Deployment** — `Dockerfile`, `docker-compose.yml`,
    `.github/workflows/ci.yml`/`deploy.yml` are all in the planned
    workspace layout above but don't exist. Right now there's no way to
    build/ship this except `cargo run` against a manually-provisioned
