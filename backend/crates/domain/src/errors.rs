@@ -10,4 +10,7 @@ pub enum DomainError {
 
     #[error("container is locked")]
     LockedContainer,
+
+    #[error("upload not found in object storage yet")]
+    UploadNotVerified,
 }

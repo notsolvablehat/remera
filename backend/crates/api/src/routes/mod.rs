@@ -3,3 +3,4 @@ pub mod containers;
 pub mod health;
 pub mod invites;
 pub mod me;
+pub mod media;

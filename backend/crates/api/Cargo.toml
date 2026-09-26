@@ -5,10 +5,9 @@ edition = "2024"
 
 [dependencies]
 domain = { path = "../domain" }
+r2 = { path = "../r2" }
 storage = { path = "../storage" }
 
-aws-config = "1.12.0"
-aws-sdk-s3 = "1.148.0"
 axum = "0.8.9"
 async-trait = "0.1"
 better-auth = { version = "0.10.0", features = ["axum", "sqlx-postgres"] }

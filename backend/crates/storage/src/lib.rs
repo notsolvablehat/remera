@@ -5,4 +5,5 @@
 
 pub mod allowlist_repo;
 pub mod containers_repo;
+pub mod media_repo;
 pub mod members_repo;

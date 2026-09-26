@@ -29,6 +29,8 @@ pub struct AppState {
     pub db: PgPool,
     pub auth: Arc<BetterAuth<AppDb>>,
     pub cache: Arc<moka::future::Cache<(uuid::Uuid, String), domain::Role>>,
+    pub r2: r2::Client,
+    pub r2_bucket: String,
 }
 
 impl AppState {
@@ -60,11 +62,21 @@ impl AppState {
                 .build(),
         );
 
+        let r2 = r2::build_client(
+            &config.s3_endpoint,
+            &config.r2_access_key_id,
+            &config.r2_secret_access_key,
+        )
+        .await;
+        let r2_bucket = config.r2_bucket_name.clone();
+
         Self {
             config,
             auth,
             db,
             cache,
+            r2,
+            r2_bucket,
         }
     }
 }

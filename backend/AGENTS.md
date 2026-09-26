@@ -145,15 +145,19 @@ backend/
   `frontend/AGENTS.md` for what it generates and where the output
   lands; this file only needs to know the hook exists and boots this
   service temporarily to read `/openapi.json` from it
-- Migrations: `backend/migrations/001-004` already exist and cover both
+- Migrations: `backend/migrations/001-005` already exist and cover both
   better-auth's own tables (`users`, `sessions`, `accounts`,
   `verifications`, `organization`, `member`, `invitation`,
   `two_factor`) and the domain tables (`container`, `container_member`,
-  `invite`). They use plain numbered filenames (`001_...`, `002_...`),
-  not sqlx's timestamp convention — keep any new migration in that same
-  numbered style; sqlx only needs the prefix to sort and be stable, but
-  mixing schemes on already-applied files would break the per-migration
-  checksum sqlx stores.
+  `invite`, `container_edit_allowlist`). They use plain numbered
+  filenames (`001_...`, `002_...`), not sqlx's timestamp convention —
+  keep any new migration in that same numbered style; sqlx only needs
+  the prefix to sort and be stable, but mixing schemes on
+  already-applied files would break the per-migration checksum sqlx
+  stores. There's no `_sqlx_migrations` tracking table in the dev DB —
+  migrations so far have been applied by hand with `psql -f`, not
+  `sqlx migrate run`; keep doing that until `sqlx-cli` is actually
+  installed, and don't assume the tracking table exists.
 
 **Built — auth layer, working end-to-end** (`better-auth` crate
 integration; see `docs/architecture/auth_layer_guide.md` for the
@@ -204,8 +208,9 @@ file-by-file build order and rationale behind each piece):
   route).
 - `auth_hooks.rs` — `AppAuthHooks` + a `DatabaseHooks<SqlxAdapter>` impl
   for invite resolution on signup, written but **not wired to
-  anything** — see trap #1 below for why, and "Next up" for the actual
-  plan.
+  anything** — see trap #1 below for why. Now superseded by the
+  allow-list resolution in `extractors/auth_user.rs` (see "Built —
+  containers + edit allow-list" below) — dead code, not a pending TODO.
 
 **Two version-specific traps in `better-auth 0.10.0` worth knowing
 before touching this again:**
@@ -235,34 +240,28 @@ before touching this again:**
    is a public, framework-agnostic dispatch entry point — it runs a
    plugin's real logic (password hashing, session creation, etc.)
    without going through the axum router at all. This is the tool for
-   "call better-auth's real signup logic from our own custom endpoint"
-   (needed for invite signup — see "Next up"), confirmed to exist and
-   work; not yet used anywhere in this codebase.
+   "call better-auth's real signup logic from our own custom endpoint" —
+   confirmed to exist and work, but not currently needed: the original
+   plan to use it for a dedicated invite-signup endpoint was superseded
+   by the allow-list model (see "Superseded" below), which resolves
+   grants passively through the *existing* signup/login routes instead.
+   Still not used anywhere in this codebase; keep in mind if a future
+   flow needs to drive better-auth logic from a non-`/auth/*` route.
 
-**Next up — invite-only signup** (design confirmed, not yet
-implemented):
-- Two signup shapes: **direct** (`email, password` — already works,
-  unchanged) and **invite** (`invite_token, email, password, name`).
-  The invite token is the only thing that determines `container_id` +
-  `role` — deliberately **not** accepted as plain client-supplied
-  fields, since that would let any client self-assign to any container
-  with any role. The server decrypts the AES-GCM token (see "Design
-  decisions" below) to get the real values.
-- Plan: a new endpoint (not better-auth's own `/auth/sign-up/email`)
-  that decrypts the token, checks the request's `email` matches the
-  token's invited email, calls `state.auth.handle_request(...)` (trap
-  #3 above) to actually create the account via better-auth's real
-  logic, then in the same transaction inserts `container_member` and
-  marks the `invite` row `accepted_at`.
-- Separately: an already-registered user who gets invited later should
-  have it "resolve on next login" per the design doc — planned as an
-  opportunistic check inside `extractors/auth_user.rs` (every
-  authenticated request already has the verified email in hand), not
-  as a hook into better-auth's sign-in route.
-- The logic already written in `auth_hooks.rs`'s `after_create_user`
-  is the right shape for "find pending invites for this email, resolve
-  them" — reuse it as a plain function called from both the new signup
-  endpoint and the login-time check, rather than duplicating it.
+**Superseded — invite-only signup via AES-GCM token** (this was the
+original plan for Edit access before the allow-list model below was
+built; kept here only so nobody re-reads it as current):
+- The idea was a token (`invite_token, email, password, name`) that
+  the server decrypts to get `container_id` + `role`, using
+  `state.auth.handle_request(...)` (trap #3 above) to create the
+  account via better-auth's real logic, then inserting
+  `container_member` in the same transaction.
+- This is **not** what got built for Edit access — see "Built —
+  containers + edit allow-list" below, which resolves Edit grants
+  passively instead (no token, no dedicated signup endpoint). The
+  AES-GCM token idea is still the plan for the separate View
+  **share-link** mechanism (see "Not yet built"), which hasn't been
+  implemented — don't confuse the two when picking this back up.
 
 **Built — containers + edit allow-list ("invite"):**
 - `storage` crate exists now (`containers_repo.rs`, `members_repo.rs`,
@@ -294,17 +293,116 @@ implemented):
 - Frontend client regenerated (`bun run gen:api`) — `Containers` and
   `Invites` tags now have their own folders under `src/lib/api/`.
 
-**Not yet built** (all decided in design discussion, none implemented):
-- `r2` crate (presigned URLs) — folder doesn't exist yet;
-  `Cargo.toml`'s `members = ["crates/*"]` will pick it up automatically
-  once added, no workspace file change needed
-- Database connection / `GET /readyz`
-- The View share-link mechanism (AES-GCM token, `GET/POST
-  .../share-link`, `GET /invites/{token}`) — deliberately out of scope
-  for the allow-list work above; the existing `invite` DB table is
-  reserved for this, not the allow-list.
-- `PATCH/DELETE /containers/{cid}`, lock/usage endpoints, members
-  list/transfer-ownership, media routes — see the route list doc.
+**Built — media (upload/get/patch/delete), presigned via R2:**
+- `r2` crate exists now (`client.rs`, `keys.rs`, `presign.rs`) — thin
+  wrapper over `aws-sdk-s3` pointed at Cloudflare R2. `build_client`
+  reads endpoint/credentials from `AppConfig` (never `std::env::var`
+  directly, per hard rule #4); `force_path_style(true)` is set since
+  path-style is what reliably works against non-AWS S3-compatible
+  endpoints. `presigned_put_url`/`presigned_get_url`/
+  `verify_uploaded_object` (HEAD)/`delete_object` are the whole public
+  surface — the server calls these to hand out URLs and verify/clean up
+  objects, but **never reads or writes object bytes itself**.
+- Config: `AppConfig` now also carries `s3_endpoint`, `r2_access_key_id`,
+  `r2_secret_access_key`, `r2_bucket_name` — all required (`.expect()`
+  panics at startup if missing, same as `DATABASE_URL`/`AUTH_SECRET`).
+  `R2_API_KEY` (a Cloudflare account-level API token, not an S3
+  credential) and `R2_ACCOUNT_ID` (superseded by reading `S3_ENDPOINT`
+  directly) are documented in `.env.example` but deliberately not read
+  anywhere.
+- Migration `006_add_container_quota_columns.sql` — adds
+  `storage_bytes/storage_limit/media_count/media_limit` to `container`
+  (defaults: 2 GiB / 2000 items — `domain::DEFAULT_STORAGE_LIMIT_BYTES`
+  / `DEFAULT_MEDIA_LIMIT`). Migration `007_create_media_table.sql` —
+  the `media` table itself; `id` has no `DEFAULT`, it's always
+  app-generated (`Uuid::now_v7()`) since the object key embeds it.
+- `domain::Media`/`MediaStatus` added (`media.rs`) — deliberately no
+  `created_at` field (chrono isn't a domain-crate dependency, per hard
+  rule #3); timestamps live only in `storage::media_repo::MediaRecord`.
+- `storage::media_repo` — two-phase upload as one atomic unit:
+  `reserve_and_create_pending` does the quota-check `UPDATE ... WHERE
+  storage_bytes + $size <= storage_limit ... RETURNING id` (409 via
+  `DomainError::QuotaExceeded` if no row) and the `INSERT` in one
+  transaction, so concurrent uploads can't both pass a stale
+  count-then-act check. `abort_pending`/`delete_ready` both release the
+  reserved quota atomically in the same transaction as the row delete.
+- `routes/media.rs`: `POST .../uploads` (Edit+, issues the presigned PUT
+  + pending row), `POST .../uploads/{mid}/complete` (uploader-only,
+  HEADs R2 and rejects on `size_mismatch`/`not_uploaded_yet`, else
+  flips to `ready`), `DELETE .../uploads/{mid}` (uploader-only, aborts a
+  still-pending upload), `GET .../media` (View+, keyset-paginated by
+  UUIDv7, `ready` only), `GET .../media/{mid}`, `GET
+  .../media/{mid}/download` (presigned GET, `Content-Disposition:
+  attachment`), `PATCH .../media/{mid}` (uploader-or-owner, renames/sets
+  caption only — no way to explicitly clear caption back to null, an
+  accepted MVP gap), `DELETE .../media/{mid}` (uploader-or-owner).
+- **Not** built here (explicitly deferred, still real gaps): multipart
+  upload for large files (`.../uploads/{mid}/parts`), bulk-delete,
+  media dimensions (width/height — would need parsing the file), and
+  `container.is_locked` enforcement (uploads/deletes don't check it —
+  same known gap as "Next up" item 1 below).
+- Verified live end-to-end against a real R2 bucket (not mocked):
+  create container → request upload URL → `PUT` bytes straight to R2
+  (server never in the data path) → `complete` HEAD-verifies size →
+  `list`/`get`/`download` → downloaded bytes diffed byte-identical
+  against the original file → `PATCH` rename+caption → `DELETE` →
+  quota (`storage_bytes`/`media_count`) correctly incremented on
+  upload-creation and released on both delete and abort; non-member
+  gets 403; declaring one size then uploading a different one gets
+  `409 size_mismatch` on complete; abandoning a pending upload and
+  calling `complete` gets `409 not_uploaded_yet`, and the abort endpoint
+  cleans it up (quota released, R2 object deleted).
+- Frontend client regenerated — `Media` tag now has its own folder
+  under `src/lib/api/`.
+
+**Next up — in priority order** (see
+`docs/architecture/howisthebackendstructured-1.md` for full route
+specs and request-flow traces for all of these):
+
+1. **Container locking** — `container.is_locked` exists in the schema
+   but nothing checks it anywhere yet (not `ContainerAccess`, not the
+   media routes above). A locked container currently doesn't actually
+   block anyone. Also still missing: `PATCH/DELETE /containers/{cid}`,
+   `PUT .../lock`, `GET .../usage`.
+2. **Members** — list members, change a member's role, remove/leave,
+   `transfer-ownership`. Without transfer-ownership, an owner can never
+   leave their own container (the "last owner can't leave" rule
+   mentioned in the hard rules has no code yet either).
+3. **View share-link** ("the other half of invite") — AES-GCM token,
+   public `GET /invites/{token}` landing page, `GET/POST
+   .../share-link[/rotate]`. Deliberately deferred when this session
+   scoped the invite work down to allow-list-only. The existing
+   `invite` DB table (token/accepted_at/expires_at) is reserved for
+   this, not the allow-list — don't repurpose it.
+4. **Media follow-ups** — multipart upload for large files, bulk-delete,
+   media dimensions. See "Built — media" above for exactly what's
+   missing.
+5. **Operational readiness**:
+   - `GET /readyz` (DB-ping readiness probe) — doesn't exist; nothing
+     currently tells an orchestrator when it's safe to route traffic.
+   - `tower_governor` is a dependency but never actually layered onto
+     the router — no rate limiting is active on any route yet.
+   - `middleware/request_id.rs` (planned in the workspace layout above)
+     doesn't exist — no request-id propagation in logs yet.
+   - Integration tests (`backend/tests/`) don't exist at all — every
+     route built so far has only been verified by hand with curl
+     against a live local Postgres. `tests/common/mod.rs` (test DB +
+     client bootstrap) needs to exist before `containers_test.rs` /
+     `invites_test.rs` / `media_test.rs` are worth writing.
+   - `auth_hooks.rs`'s `AppAuthHooks`/`DatabaseHooks` impl is dead code
+     now that allow-list resolution lives in `auth_user.rs` instead —
+     worth deleting so it doesn't look load-bearing to a future reader,
+     but confirm with whoever's driving before removing it.
+6. **Deployment** — `Dockerfile`, `docker-compose.yml`,
+   `.github/workflows/ci.yml`/`deploy.yml` are all in the planned
+   workspace layout above but don't exist. Right now there's no way to
+   build/ship this except `cargo run` against a manually-provisioned
+   local Postgres, and `AUTH_SECRET` in `.env` is a throwaway dev value
+   with no real secrets story yet. (R2 credentials in `.env` *are* real
+   — a live test bucket — unlike `AUTH_SECRET`; still needs a proper
+   secrets story before any real deploy, just flagging it's not a
+   placeholder like the others.)
+
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.
