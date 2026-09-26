@@ -5,8 +5,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './addAllowlistEntryRequest';
+export * from './allowlistEntryDto';
+export * from './allowlistResponse';
 export * from './authSessionDto';
 export * from './authUserDto';
+export * from './containerDto';
+export * from './containerListResponse';
+export * from './createContainerRequest';
 export * from './getSessionResponse';
 export * from './healthResponse';
 export * from './meResponse';

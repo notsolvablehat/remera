@@ -264,15 +264,47 @@ implemented):
   them" — reuse it as a plain function called from both the new signup
   endpoint and the login-time check, rather than duplicating it.
 
+**Built — containers + edit allow-list ("invite"):**
+- `storage` crate exists now (`containers_repo.rs`, `members_repo.rs`,
+  `allowlist_repo.rs`) — sqlx lives here, not inline in handlers (except
+  `container_access.rs`'s pre-existing inline query, left as-is).
+- `domain::Container` struct + `MAX_OWNED_CONTAINERS = 5` added next to
+  `Role` in `container.rs`.
+- `routes/containers.rs`: `POST /containers` (owner-quota-checked,
+  transactional owner-membership insert, seeds the moka cache),
+  `GET /containers`, `GET /containers/{container_id}` — the last one is
+  the first real usage of `ContainerAccess<Viewer>`.
+- Migration `005_create_container_edit_allowlist.sql` — plain
+  email-based allow-list table, distinct from the existing `invite`
+  table (token/accepted_at/expires_at), which stays unused for now.
+- `routes/invites.rs`: `POST/GET/DELETE .../edit-allowlist[/{email}]`,
+  all `ContainerAccess<Owner>`-gated. Delete also revokes the granted
+  `editor` membership row and invalidates the moka cache entry.
+- Passive resolution wired into `extractors/auth_user.rs`: every
+  authenticated request calls
+  `storage::allowlist_repo::resolve_pending_edit_invites` for the
+  session's verified email — covers both "signs up" and "logs in" in
+  one place, since better-auth's `DatabaseHooks` can't be used (trap #1
+  still applies). `auth_hooks.rs`'s `AppAuthHooks` is now fully
+  superseded by this — still present but dead; ask before deleting it.
+- Verified live end-to-end: signup → create container → add friend's
+  email to allow-list → friend signs up → friend's `GET /containers`
+  shows `editor` automatically → delete allow-list entry revokes it →
+  6th owned container 409s.
+- Frontend client regenerated (`bun run gen:api`) — `Containers` and
+  `Invites` tags now have their own folders under `src/lib/api/`.
+
 **Not yet built** (all decided in design discussion, none implemented):
-- `storage` crate (sqlx repos) and `r2` crate (presigned URLs) — folders
-  don't exist yet; `Cargo.toml`'s `members = ["crates/*"]` will pick
-  them up automatically once added, no workspace file change needed
+- `r2` crate (presigned URLs) — folder doesn't exist yet;
+  `Cargo.toml`'s `members = ["crates/*"]` will pick it up automatically
+  once added, no workspace file change needed
 - Database connection / `GET /readyz`
-- Containers, members, media routes — see the route list and
-  request-flow docs (if present in `docs/`) for the full planned
-  surface. This is also when `ContainerAccess<Role>` (already written)
-  finally gets used.
+- The View share-link mechanism (AES-GCM token, `GET/POST
+  .../share-link`, `GET /invites/{token}`) — deliberately out of scope
+  for the allow-list work above; the existing `invite` DB table is
+  reserved for this, not the allow-list.
+- `PATCH/DELETE /containers/{cid}`, lock/usage endpoints, members
+  list/transfer-ownership, media routes — see the route list doc.
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.

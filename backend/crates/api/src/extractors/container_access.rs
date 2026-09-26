@@ -15,6 +15,7 @@ pub struct Editor;
 pub struct Owner;
 
 pub struct ContainerAccess<R> {
+    #[allow(dead_code)]
     pub user: AuthUser,
     pub role: Role,
     // PhantomData because R (Viewer/Editor/Owner) only exists to make

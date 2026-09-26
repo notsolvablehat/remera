@@ -32,7 +32,7 @@ impl FromRequestParts<AppState> for AuthUser {
         // AppState-based extractors everywhere else.
         let session = CurrentSession::<AppDb>::from_request_parts(parts, &state.auth).await?;
 
-        Ok(AuthUser {
+        let user = AuthUser {
             id: session.user.id().to_string(),
             email: session.user.email().map(str::to_string),
             name: session.user.name().map(str::to_string),
@@ -42,10 +42,27 @@ impl FromRequestParts<AppState> for AuthUser {
             banned: session.user.banned(),
             ban_reason: session.user.ban_reason().map(str::to_string),
             ban_expires: session.user.ban_expires().map(|d| d.to_rfc3339()),
-        })
+        };
+
+        // Edit allow-list grants resolve passively — the moment an
+        // allow-listed email is next seen on an authenticated request
+        // (signup or login, this extractor runs on both), grant Editor
+        // on every container that listed it. See backend/AGENTS.md's
+        // "Design decisions already made". Best-effort: a failure here
+        // shouldn't block the request that triggered it.
+        if let Some(email) = &user.email
+            && let Err(err) =
+                storage::allowlist_repo::resolve_pending_edit_invites(&state.db, &user.id, email)
+                    .await
+        {
+            tracing::warn!(?err, "failed to resolve pending edit invites");
+        }
+
+        Ok(user)
     }
 }
 
+#[allow(dead_code)]
 pub struct MaybeUser(pub Option<AuthUser>);
 
 impl FromRequestParts<AppState> for MaybeUser {

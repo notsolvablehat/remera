@@ -47,6 +47,8 @@ pub fn build_router(state: AppState) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(routes::health::router())
         .merge(routes::me::router())
+        .merge(routes::containers::router())
+        .merge(routes::invites::router())
         .split_for_parts();
 
     let origins: Vec<_> = state

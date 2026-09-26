@@ -7,5 +7,5 @@
 pub mod container;
 pub mod errors;
 
-pub use container::{Role, role_meets_minimum};
+pub use container::{Container, MAX_OWNED_CONTAINERS, Role, role_meets_minimum};
 pub use errors::DomainError;
