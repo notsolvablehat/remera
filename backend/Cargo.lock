@@ -136,8 +136,10 @@ dependencies = [
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "axum",
+ "base64",
  "better-auth",
  "domain",
  "dotenvy",
@@ -147,6 +149,7 @@ dependencies = [
  "r2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "storage",
  "thiserror 2.0.20",

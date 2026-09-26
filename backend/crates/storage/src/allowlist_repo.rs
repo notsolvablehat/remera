@@ -6,10 +6,15 @@ pub struct AllowlistEntry {
     pub claimed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Re-adding an email that was already claimed and then left/was removed
+/// must actually re-arm the invite — `DO NOTHING` would silently leave
+/// `claimed_at` set from the previous claim, permanently blocking
+/// re-resolution for that email (see backend/AGENTS.md's "Discovered
+/// gap" note this fixes).
 pub async fn insert(pool: &PgPool, container_id: Uuid, email: &str) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "INSERT INTO container_edit_allowlist (container_id, email) VALUES ($1, $2)
-         ON CONFLICT (container_id, email) DO NOTHING",
+         ON CONFLICT (container_id, email) DO UPDATE SET claimed_at = NULL",
         container_id,
         email
     )

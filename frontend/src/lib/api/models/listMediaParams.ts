@@ -22,4 +22,8 @@ type?: string;
  * Filter by uploader user id
  */
 uploader?: string;
+/**
+ * Anonymous View access via a container's share link (see GET /containers/{cid}/share-link)
+ */
+share_token?: string;
 };

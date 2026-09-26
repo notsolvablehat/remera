@@ -15,7 +15,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use crate::{
-    extractors::container_access::{ContainerAccess, Editor, Viewer},
+    extractors::container_access::{ContainerAccess, ContainerViewAccess, Editor},
     state::AppState,
 };
 
@@ -145,9 +145,6 @@ async fn create_upload(
         return error_response(StatusCode::BAD_REQUEST, "invalid_request");
     }
 
-    // NOTE: container.is_locked isn't checked here yet — full lock
-    // enforcement is still pending (see backend/AGENTS.md's "Next up",
-    // item 2). Locked containers currently don't block uploads.
     let media_id = Uuid::now_v7();
     let object_key = r2::keys::media_object_key(container_id, media_id);
 
@@ -323,11 +320,17 @@ async fn abort_upload(
         ("limit" = Option<i64>, Query, description = "Page size, capped at 100"),
         ("type" = Option<String>, Query, description = "Filter by content-type prefix: image or video"),
         ("uploader" = Option<String>, Query, description = "Filter by uploader user id"),
+        ("share_token" = Option<String>, Query, description = "Anonymous View access via a container's share link (see GET /containers/{cid}/share-link)"),
     ),
-    responses((status = 200, description = "Ready media in the container", body = MediaListResponse))
+    responses(
+        (status = 200, description = "Ready media in the container", body = MediaListResponse),
+        (status = 403, description = "Not a member and no valid share token"),
+        (status = 404, description = "Container not found"),
+        (status = 423, description = "Container is locked"),
+    )
 )]
 async fn list_media(
-    _access: ContainerAccess<Viewer>,
+    _access: ContainerViewAccess,
     State(state): State<AppState>,
     Path(container_id): Path<Uuid>,
     Query(query): Query<ListMediaQuery>,
@@ -371,14 +374,17 @@ async fn list_media(
     params(
         ("container_id" = Uuid, Path, description = "Container id"),
         ("media_id" = Uuid, Path, description = "Media id"),
+        ("share_token" = Option<String>, Query, description = "Anonymous View access via a container's share link"),
     ),
     responses(
         (status = 200, description = "Media metadata", body = MediaDto),
+        (status = 403, description = "Not a member and no valid share token"),
         (status = 404, description = "Not found"),
+        (status = 423, description = "Container is locked"),
     )
 )]
 async fn get_media(
-    _access: ContainerAccess<Viewer>,
+    _access: ContainerViewAccess,
     State(state): State<AppState>,
     Path((container_id, media_id)): Path<(Uuid, Uuid)>,
 ) -> axum::response::Response {
@@ -401,14 +407,17 @@ async fn get_media(
     params(
         ("container_id" = Uuid, Path, description = "Container id"),
         ("media_id" = Uuid, Path, description = "Media id"),
+        ("share_token" = Option<String>, Query, description = "Anonymous View access via a container's share link"),
     ),
     responses(
         (status = 200, description = "Presigned download URL", body = DownloadUrlResponse),
+        (status = 403, description = "Not a member and no valid share token"),
         (status = 404, description = "Not found"),
+        (status = 423, description = "Container is locked"),
     )
 )]
 async fn download_media(
-    _access: ContainerAccess<Viewer>,
+    _access: ContainerViewAccess,
     State(state): State<AppState>,
     Path((container_id, media_id)): Path<(Uuid, Uuid)>,
 ) -> axum::response::Response {

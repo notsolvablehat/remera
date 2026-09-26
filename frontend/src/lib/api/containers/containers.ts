@@ -10,6 +10,7 @@ import type {
   ContainerUsageResponse,
   CreateContainerRequest,
   SetLockRequest,
+  ShareLinkResponse,
   UpdateContainerRequest
 } from '../models';
 
@@ -74,6 +75,22 @@ const listContainers = (
     },
       );
     }
+  const getShareLink = (
+    containerId: string,
+ ) => {
+      return customInstance<ShareLinkResponse>(
+      {url: `/containers/${containerId}/share-link`, method: 'GET'
+    },
+      );
+    }
+  const rotateShareLink = (
+    containerId: string,
+ ) => {
+      return customInstance<ShareLinkResponse>(
+      {url: `/containers/${containerId}/share-link/rotate`, method: 'POST'
+    },
+      );
+    }
   const getContainerUsage = (
     containerId: string,
  ) => {
@@ -82,11 +99,13 @@ const listContainers = (
     },
       );
     }
-  return {listContainers,createContainer,getContainer,deleteContainer,updateContainer,setContainerLock,getContainerUsage}};
+  return {listContainers,createContainer,getContainer,deleteContainer,updateContainer,setContainerLock,getShareLink,rotateShareLink,getContainerUsage}};
 export type ListContainersResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['listContainers']>>>
 export type CreateContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['createContainer']>>>
 export type GetContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['getContainer']>>>
 export type DeleteContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['deleteContainer']>>>
 export type UpdateContainerResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['updateContainer']>>>
 export type SetContainerLockResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['setContainerLock']>>>
+export type GetShareLinkResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['getShareLink']>>>
+export type RotateShareLinkResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['rotateShareLink']>>>
 export type GetContainerUsageResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getContainers>['getContainerUsage']>>>

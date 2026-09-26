@@ -7,7 +7,9 @@
 import type {
   CreateUploadRequest,
   CreateUploadResponse,
+  DownloadMediaParams,
   DownloadUrlResponse,
+  GetMediaParams,
   ListMediaParams,
   MediaDto,
   MediaListResponse,
@@ -32,9 +34,11 @@ const listMedia = (
   const getMedia = (
     containerId: string,
     mediaId: string,
+    params?: GetMediaParams,
  ) => {
       return customInstance<MediaDto>(
-      {url: `/containers/${containerId}/media/${mediaId}`, method: 'GET'
+      {url: `/containers/${containerId}/media/${mediaId}`, method: 'GET',
+        params
     },
       );
     }
@@ -62,9 +66,11 @@ const listMedia = (
   const downloadMedia = (
     containerId: string,
     mediaId: string,
+    params?: DownloadMediaParams,
  ) => {
       return customInstance<DownloadUrlResponse>(
-      {url: `/containers/${containerId}/media/${mediaId}/download`, method: 'GET'
+      {url: `/containers/${containerId}/media/${mediaId}/download`, method: 'GET',
+        params
     },
       );
     }

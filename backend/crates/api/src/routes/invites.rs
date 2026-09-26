@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
-use storage::allowlist_repo;
+use storage::{allowlist_repo, containers_repo};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
@@ -161,9 +161,66 @@ async fn delete_allowlist_entry(
     }
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct SharePreviewResponse {
+    pub container_id: Uuid,
+    pub name: String,
+    pub media_count: i64,
+}
+
+/// Public, no auth, no membership required — this is the landing-page
+/// preview a share link resolves to, not the media grid itself (that's
+/// `GET /containers/{cid}/media?share_token=...`, gated by
+/// `ContainerViewAccess`). Rate-limited the same as every other route,
+/// via the global governor layer in router.rs.
+#[utoipa::path(
+    get,
+    path = "/invites/{token}",
+    tag = "Invites",
+    params(("token" = String, Path, description = "Share-link token")),
+    responses(
+        (status = 200, description = "Container preview", body = SharePreviewResponse),
+        (status = 404, description = "Invalid, expired, or rotated-away token"),
+        (status = 423, description = "Container is locked"),
+    )
+)]
+async fn resolve_share_token(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> axum::response::Response {
+    let Ok((container_id, share_link_id)) = state.share_link_codec.decode(&token) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "invalid_token"})),
+        )
+            .into_response();
+    };
+
+    match containers_repo::get_share_preview(&state.db, container_id, share_link_id).await {
+        Ok(Some(preview)) if preview.is_locked => (
+            StatusCode::LOCKED,
+            Json(serde_json::json!({"error": "container_locked"})),
+        )
+            .into_response(),
+        Ok(Some(preview)) => Json(SharePreviewResponse {
+            container_id,
+            name: preview.name,
+            media_count: preview.media_count,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "invalid_token"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(add_allowlist_entry))
         .routes(routes!(list_allowlist))
         .routes(routes!(delete_allowlist_entry))
+        .routes(routes!(resolve_share_token))
 }

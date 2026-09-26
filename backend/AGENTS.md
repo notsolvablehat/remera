@@ -492,20 +492,84 @@ built; kept here only so nobody re-reads it as current):
 - Frontend client regenerated — `Members` tag now has its own folder
   under `src/lib/api/`.
 
+**Fixed — allow-list re-invite bug:** `allowlist_repo::insert` used
+`ON CONFLICT (container_id, email) DO NOTHING`, so once an entry was
+claimed, re-adding the same email after that person left/was removed
+was a silent no-op (`claimed_at` stayed set forever). Changed to
+`DO UPDATE SET claimed_at = NULL`, which re-arms the invite. Verified
+live: friend claims → leaves → owner re-adds them to the allow-list →
+allow-list shows `claimed: false` again → friend's next authenticated
+request re-grants Editor. This was the gap noted in the previous
+"Built — members" section above; that note is now stale/resolved.
+
+**Built — View share-link ("the other half of invite"):**
+- `api/src/share_link.rs` (new) — `ShareLinkCodec`: AES-256-GCM,
+  encrypts/decrypts a small JSON payload `{ container_id, share_link_id }`
+  into the opaque token string. Deliberately **stateless** — there's no
+  token-storage table; "rotate" works by changing
+  `container.share_link_id` in Postgres (new migration
+  `009_add_container_share_link_id.sql`), which makes every previously
+  issued token's embedded id stop matching even though it still
+  decrypts fine. The AES key is derived from `AUTH_SECRET` via SHA-256
+  with a fixed context-string prefix (domain separation) rather than a
+  second secret in `.env` — a deliberate tradeoff, noted in the module
+  doc comment.
+- `containers_repo` gained `get_or_create_share_link_id` (lazy-create,
+  idempotent — same id every call, though the *token ciphertext*
+  differs each call since AES-GCM uses a fresh random nonce every
+  encode; verified live that two differently-encrypted tokens both
+  resolve to the same container), `rotate_share_link_id`, and
+  `get_share_preview` (name + ready-media count, for the public preview
+  endpoint).
+- `extractors/container_access.rs`: `ContainerStatus` (the per-container
+  cache used for lock/delete checks) gained a `share_link_id` field —
+  fetched and cached alongside `is_locked`/`is_deleted` in the same
+  query, no extra round trip. New extractor `ContainerViewAccess`
+  (distinct from `ContainerAccess<Viewer>`, which still means
+  "authenticated member"): tries an authenticated Viewer+ member first,
+  then falls back to a `?share_token=` query param that decrypts to
+  this container's id **and** matches its *current* `share_link_id`.
+  Locking blocks both paths (authenticated-insufficient and anonymous)
+  except the owner, same as `ContainerAccess<R>`. Swapped onto the three
+  read-only media routes — `GET .../media`, `GET .../media/{mid}`,
+  `GET .../media/{mid}/download` — so a share link actually lets an
+  anonymous visitor browse/download, not just resolve a preview.
+- `routes/containers.rs`: `GET .../share-link` (Owner; lazy-create),
+  `POST .../share-link/rotate` (Owner). Both invalidate
+  `container_status_cache` after writing — **this was a real bug caught
+  during live testing**: `get_share_link` originally didn't invalidate
+  on first creation, so `ContainerViewAccess` kept reading the
+  container's creation-time cached status (`share_link_id: None`) for
+  up to the cache's TTL, and a share token issued moments earlier would
+  403 until the cache expired. Fixed by invalidating unconditionally
+  after `get_or_create_share_link_id`, not just after rotate.
+- `routes/invites.rs`: `GET /invites/{token}` (public, no auth, rate
+  limited like everything else) — decrypts the token and returns
+  `{ container_id, name, media_count }`, or `404` for
+  invalid/expired/rotated-away tokens, or `423` if the container is
+  locked. This is the landing-page preview, not the media grid itself.
+- Verified live end-to-end against real R2-backed media: generated a
+  share link, confirmed non-owner can't fetch it (`403`); confirmed two
+  separately-issued tokens (different ciphertext) both resolve to the
+  same container; uploaded a real file as the owner, then as a fully
+  anonymous client (no `Authorization` header at all) listed media,
+  fetched metadata, and downloaded the file via the share token —
+  downloaded bytes diffed byte-identical against the original; rotated
+  the link and confirmed the old token immediately `404`s on preview and
+  `403`s on media access while the new token works for both; locked the
+  container and confirmed anonymous share-token access and the preview
+  endpoint both `423` (even though the token itself is still valid),
+  then confirmed unlock restores it immediately.
+- Frontend client regenerated — new models/params for the share-link
+  and preview endpoints.
+
 **Next up — in priority order** (see
 `docs/architecture/howisthebackendstructured-1.md` for full route
 specs and request-flow traces for all of these):
-
-1. **View share-link** ("the other half of invite") — AES-GCM token,
-   public `GET /invites/{token}` landing page, `GET/POST
-   .../share-link[/rotate]`. Deliberately deferred when this session
-   scoped the invite work down to allow-list-only. The existing
-   `invite` DB table (token/accepted_at/expires_at) is reserved for
-   this, not the allow-list — don't repurpose it.
-2. **Media follow-ups** — multipart upload for large files, bulk-delete,
+1. **Media follow-ups** — multipart upload for large files, bulk-delete,
    media dimensions. See "Built — media" above for exactly what's
    missing.
-3. **Operational readiness**:
+2. **Operational readiness**:
    - `GET /readyz` (DB-ping readiness probe) — doesn't exist; nothing
      currently tells an orchestrator when it's safe to route traffic.
    - Per-route rate-limit tuning — one flat global limit exists now
@@ -523,11 +587,7 @@ specs and request-flow traces for all of these):
      now that allow-list resolution lives in `auth_user.rs` instead —
      worth deleting so it doesn't look load-bearing to a future reader,
      but confirm with whoever's driving before removing it.
-   - `allowlist_repo::insert`'s `ON CONFLICT DO NOTHING` means a
-     claimed allow-list entry silently blocks re-inviting that email
-     after they leave/are removed (see "Built — members" above) —
-     small fix, not yet done.
-4. **Deployment** — `Dockerfile`, `docker-compose.yml`,
+3. **Deployment** — `Dockerfile`, `docker-compose.yml`,
    `.github/workflows/ci.yml`/`deploy.yml` are all in the planned
    workspace layout above but don't exist. Right now there's no way to
    build/ship this except `cargo run` against a manually-provisioned

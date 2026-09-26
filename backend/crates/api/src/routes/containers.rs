@@ -85,6 +85,7 @@ async fn create_container(
                     ContainerStatus {
                         is_locked: false,
                         is_deleted: false,
+                        share_link_id: None,
                     },
                 )
                 .await;
@@ -352,6 +353,80 @@ async fn get_container_usage(
     }
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct ShareLinkResponse {
+    pub token: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/containers/{container_id}/share-link",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    responses(
+        (status = 200, description = "The container's public View share-link token (created if one doesn't exist yet)", body = ShareLinkResponse),
+        (status = 403, description = "Not the owner"),
+        (status = 404, description = "Container not found"),
+    )
+)]
+async fn get_share_link(
+    _access: ContainerAccess<Owner>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+) -> axum::response::Response {
+    match containers_repo::get_or_create_share_link_id(&state.db, container_id).await {
+        Ok(Some(share_link_id)) => {
+            // The cached ContainerStatus (read by ContainerViewAccess) may
+            // still hold `share_link_id: None` from before this call — a
+            // freshly created id has to be visible immediately, not after
+            // up to 300s of cache TTL.
+            state.container_status_cache.invalidate(&container_id).await;
+            let token = state.share_link_codec.encode(container_id, share_link_id);
+            Json(ShareLinkResponse { token }).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/containers/{container_id}/share-link/rotate",
+    tag = "Containers",
+    params(("container_id" = Uuid, Path, description = "Container id")),
+    responses(
+        (status = 200, description = "A new token — every previously issued share link stops working", body = ShareLinkResponse),
+        (status = 403, description = "Not the owner"),
+        (status = 404, description = "Container not found"),
+    )
+)]
+async fn rotate_share_link(
+    _access: ContainerAccess<Owner>,
+    State(state): State<AppState>,
+    Path(container_id): Path<Uuid>,
+) -> axum::response::Response {
+    match containers_repo::rotate_share_link_id(&state.db, container_id).await {
+        Ok(Some(share_link_id)) => {
+            // Old tokens embed the previous share_link_id, which no
+            // longer matches — but only once the cached ContainerStatus
+            // (read by ContainerViewAccess) is refreshed with the new one.
+            state.container_status_cache.invalidate(&container_id).await;
+            let token = state.share_link_codec.encode(container_id, share_link_id);
+            Json(ShareLinkResponse { token }).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found"})),
+        )
+            .into_response(),
+        Err(_) => db_error(),
+    }
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(create_container))
@@ -361,4 +436,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(delete_container))
         .routes(routes!(set_container_lock))
         .routes(routes!(get_container_usage))
+        .routes(routes!(get_share_link))
+        .routes(routes!(rotate_share_link))
 }

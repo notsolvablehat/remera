@@ -10,6 +10,7 @@ mod extractors;
 mod middleware;
 mod router;
 mod routes;
+mod share_link;
 mod state;
 
 #[tokio::main]

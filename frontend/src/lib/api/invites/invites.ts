@@ -6,7 +6,8 @@
  */
 import type {
   AddAllowlistEntryRequest,
-  AllowlistResponse
+  AllowlistResponse,
+  SharePreviewResponse
 } from '../models';
 
 import { customInstance } from '../../axios-instance';
@@ -42,7 +43,23 @@ const listAllowlist = (
     },
       );
     }
-  return {listAllowlist,addAllowlistEntry,deleteAllowlistEntry}};
+  /**
+ * @summary Public, no auth, no membership required — this is the landing-page
+preview a share link resolves to, not the media grid itself (that's
+`GET /containers/{cid}/media?share_token=...`, gated by
+`ContainerViewAccess`). Rate-limited the same as every other route,
+via the global governor layer in router.rs.
+ */
+const resolveShareToken = (
+    token: string,
+ ) => {
+      return customInstance<SharePreviewResponse>(
+      {url: `/invites/${token}`, method: 'GET'
+    },
+      );
+    }
+  return {listAllowlist,addAllowlistEntry,deleteAllowlistEntry,resolveShareToken}};
 export type ListAllowlistResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getInvites>['listAllowlist']>>>
 export type AddAllowlistEntryResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getInvites>['addAllowlistEntry']>>>
 export type DeleteAllowlistEntryResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getInvites>['deleteAllowlistEntry']>>>
+export type ResolveShareTokenResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getInvites>['resolveShareToken']>>>

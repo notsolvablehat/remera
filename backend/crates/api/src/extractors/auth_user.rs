@@ -62,7 +62,6 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
-#[allow(dead_code)]
 pub struct MaybeUser(pub Option<AuthUser>);
 
 impl FromRequestParts<AppState> for MaybeUser {

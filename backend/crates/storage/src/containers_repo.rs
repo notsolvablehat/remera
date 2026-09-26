@@ -200,3 +200,72 @@ pub async fn get_usage(pool: &PgPool, id: Uuid) -> Result<Option<ContainerUsage>
         member_count: r.member_count.unwrap_or(0),
     }))
 }
+
+/// Lazily creates the container's share-link id if it doesn't have one
+/// yet, otherwise returns the existing one — so `GET .../share-link` is
+/// idempotent and doesn't invalidate previously distributed links just
+/// by being called again.
+pub async fn get_or_create_share_link_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "UPDATE container
+         SET share_link_id = COALESCE(share_link_id, gen_random_uuid())
+         WHERE id = $1 AND deleted_at IS NULL
+         RETURNING share_link_id",
+        id
+    )
+    .fetch_optional(pool)
+    .await
+    .map(|opt| opt.flatten())
+}
+
+/// Assigns a brand-new share-link id, which invalidates every
+/// previously issued token for this container — a decrypted token's
+/// embedded id no longer matches what's stored, so it fails validation
+/// even though the ciphertext itself still decrypts fine.
+pub async fn rotate_share_link_id(pool: &PgPool, id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "UPDATE container SET share_link_id = gen_random_uuid()
+         WHERE id = $1 AND deleted_at IS NULL
+         RETURNING share_link_id",
+        id
+    )
+    .fetch_optional(pool)
+    .await
+    .map(|opt| opt.flatten())
+}
+
+pub struct SharePreview {
+    pub name: String,
+    pub is_locked: bool,
+    pub media_count: i64,
+}
+
+/// Resolves a decrypted share token's `(container_id, share_link_id)`
+/// pair to a lightweight preview — only succeeds if `share_link_id`
+/// matches what's currently stored (i.e. hasn't been rotated since the
+/// token was issued).
+pub async fn get_share_preview(
+    pool: &PgPool,
+    container_id: Uuid,
+    share_link_id: Uuid,
+) -> Result<Option<SharePreview>, sqlx::Error> {
+    let row = sqlx::query!(
+        "SELECT c.name, c.is_locked,
+                (SELECT COUNT(*) FROM media m WHERE m.container_id = c.id AND m.status = 'ready') AS media_count
+         FROM container c
+         WHERE c.id = $1 AND c.share_link_id = $2 AND c.deleted_at IS NULL",
+        container_id,
+        share_link_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| SharePreview {
+        name: r.name,
+        is_locked: r.is_locked,
+        media_count: r.media_count.unwrap_or(0),
+    }))
+}
