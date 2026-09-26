@@ -13,4 +13,7 @@ pub enum DomainError {
 
     #[error("upload not found in object storage yet")]
     UploadNotVerified,
+
+    #[error("the owner must transfer ownership before leaving or being removed")]
+    OwnerTransferRequired,
 }

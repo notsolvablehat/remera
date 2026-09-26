@@ -50,6 +50,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(routes::containers::router())
         .merge(routes::invites::router())
         .merge(routes::media::router())
+        .merge(routes::members::router())
         .split_for_parts();
 
     let origins: Vec<_> = state

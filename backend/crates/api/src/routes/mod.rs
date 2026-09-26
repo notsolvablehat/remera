@@ -4,3 +4,4 @@ pub mod health;
 pub mod invites;
 pub mod me;
 pub mod media;
+pub mod members;

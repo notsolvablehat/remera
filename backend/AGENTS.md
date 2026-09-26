@@ -438,24 +438,74 @@ built; kept here only so nobody re-reads it as current):
 - Frontend client regenerated — `containers.ts` picked up the three new
   endpoints and their models.
 
+**Built — members (list, role-change, leave/remove, transfer-ownership):**
+- `domain::DomainError::OwnerTransferRequired` (new variant) — the
+  "last owner can't leave" rule now has real code: `storage::
+  members_repo::remove_member` looks up `container.owner_id` first and
+  refuses (this error) if the target of a remove/leave is the current
+  owner, regardless of who's asking.
+- `storage::members_repo` gained `list_for_container` (joins `users`
+  for name/email — both nullable in the `users` table, so the DTO
+  fields are `Option<String>`), `update_role` (Editor/Viewer only —
+  the CHECK constraint on `container_member.role` would reject
+  `'owner'` anyway, but validation happens in the route handler first),
+  `remove_member`, and `transfer_ownership`.
+- `transfer_ownership` is a **real swap**, not a flat demotion: the
+  target becomes `owner`, and the *previous* owner takes whatever role
+  the target held before the swap (all in one transaction, alongside
+  updating `container.owner_id` itself, which is what the owned-container
+  quota check in `containers_repo::create_with_owner` reads).
+- `routes/members.rs` (new — `routes/mod.rs`/`router.rs` updated):
+  `GET .../members` (View+), `PATCH .../members/{uid}` (Owner only;
+  rejects `role: "owner"` and rejects targeting the current owner's own
+  row with `use_transfer_ownership` — that's what the transfer endpoint
+  is for), `DELETE .../members/{uid}` (Owner removing anyone, **or**
+  any member removing themselves — "leave" and "remove" are the same
+  endpoint, gated by `user_id == caller.id || role == Owner`),
+  `POST .../transfer-ownership` (Owner only, body
+  `{ new_owner_user_id }`, rejects transferring to yourself).
+- Every mutation here (`update_role`, `remove_member`,
+  `transfer_ownership`) explicitly invalidates the relevant
+  `(container_id, user_id)` entries in `AppState.cache` — same
+  immediate-effect reasoning as the lock/allow-list-revoke invalidation
+  elsewhere, confirmed live (a demoted/removed user loses access on
+  their very next request, not after the cache's TTL).
+- **Discovered gap, not fixed here**: `allowlist_repo::insert` uses
+  `ON CONFLICT (container_id, email) DO NOTHING`, so once an
+  allow-list entry is claimed, re-adding the same email after that
+  person leaves/is removed is a silent no-op — they can't be
+  re-invited via the allow-list without a manual DB fix. Worth a
+  follow-up (e.g. resetting `claimed_at` on conflict instead of
+  no-op'ing) but out of scope for the members work itself.
+- Verified live end-to-end: listed members (owner + allow-listed
+  editor); owner demoted editor→viewer, confirmed the demoted user's
+  very next request (an upload attempt) got `403` immediately;
+  rejected `role: "owner"` and rejected patching the owner's own row;
+  owner blocked from leaving (`409 owner_must_transfer_first`) while a
+  regular member's self-leave succeeded (`204`) and immediately lost
+  access; non-owner blocked from transferring ownership (`403`),
+  transferring to a non-member rejected (`404`), transferring to a
+  real member swapped roles correctly (verified via `GET .../members`
+  showing the flip, the old owner immediately losing lock/patch
+  access, the new owner immediately gaining it, and `container.owner_id`
+  in Postgres reflecting the change).
+- Frontend client regenerated — `Members` tag now has its own folder
+  under `src/lib/api/`.
+
 **Next up — in priority order** (see
 `docs/architecture/howisthebackendstructured-1.md` for full route
 specs and request-flow traces for all of these):
 
-1. **Members** — list members, change a member's role, remove/leave,
-   `transfer-ownership`. Without transfer-ownership, an owner can never
-   leave their own container (the "last owner can't leave" rule
-   mentioned in the hard rules has no code yet either).
-2. **View share-link** ("the other half of invite") — AES-GCM token,
+1. **View share-link** ("the other half of invite") — AES-GCM token,
    public `GET /invites/{token}` landing page, `GET/POST
    .../share-link[/rotate]`. Deliberately deferred when this session
    scoped the invite work down to allow-list-only. The existing
    `invite` DB table (token/accepted_at/expires_at) is reserved for
    this, not the allow-list — don't repurpose it.
-3. **Media follow-ups** — multipart upload for large files, bulk-delete,
+2. **Media follow-ups** — multipart upload for large files, bulk-delete,
    media dimensions. See "Built — media" above for exactly what's
    missing.
-4. **Operational readiness**:
+3. **Operational readiness**:
    - `GET /readyz` (DB-ping readiness probe) — doesn't exist; nothing
      currently tells an orchestrator when it's safe to route traffic.
    - Per-route rate-limit tuning — one flat global limit exists now
@@ -473,7 +523,11 @@ specs and request-flow traces for all of these):
      now that allow-list resolution lives in `auth_user.rs` instead —
      worth deleting so it doesn't look load-bearing to a future reader,
      but confirm with whoever's driving before removing it.
-5. **Deployment** — `Dockerfile`, `docker-compose.yml`,
+   - `allowlist_repo::insert`'s `ON CONFLICT DO NOTHING` means a
+     claimed allow-list entry silently blocks re-inviting that email
+     after they leave/are removed (see "Built — members" above) —
+     small fix, not yet done.
+4. **Deployment** — `Dockerfile`, `docker-compose.yml`,
    `.github/workflows/ci.yml`/`deploy.yml` are all in the planned
    workspace layout above but don't exist. Right now there's no way to
    build/ship this except `cargo run` against a manually-provisioned
