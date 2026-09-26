@@ -7,8 +7,18 @@
 
 export interface MeResponse {
   /** @nullable */
+  ban_expires?: string | null;
+  /** @nullable */
+  ban_reason?: string | null;
+  banned: boolean;
+  /** @nullable */
   email?: string | null;
+  email_verified: boolean;
   id: string;
   /** @nullable */
+  image?: string | null;
+  /** @nullable */
   name?: string | null;
+  /** @nullable */
+  username?: string | null;
 }

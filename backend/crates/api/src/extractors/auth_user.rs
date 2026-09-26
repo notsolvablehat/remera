@@ -8,6 +8,13 @@ pub struct AuthUser {
     pub id: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    pub email_verified: bool,
+    pub image: Option<String>,
+    // Not asked at signup — only ever set via POST /auth/update-user.
+    pub username: Option<String>,
+    pub banned: bool,
+    pub ban_reason: Option<String>,
+    pub ban_expires: Option<String>,
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -29,6 +36,12 @@ impl FromRequestParts<AppState> for AuthUser {
             id: session.user.id().to_string(),
             email: session.user.email().map(str::to_string),
             name: session.user.name().map(str::to_string),
+            email_verified: session.user.email_verified(),
+            image: session.user.image().map(str::to_string),
+            username: session.user.username().map(str::to_string),
+            banned: session.user.banned(),
+            ban_reason: session.user.ban_reason().map(str::to_string),
+            ban_expires: session.user.ban_expires().map(|d| d.to_rfc3339()),
         })
     }
 }

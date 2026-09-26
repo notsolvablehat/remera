@@ -56,6 +56,7 @@ backend/
 │   │       └── routes/
 │   │           ├── mod.rs
 │   │           ├── health.rs
+│   │           ├── auth.rs      # docs-only utoipa wrapper for better-auth's /auth/*
 │   │           ├── me.rs
 │   │           ├── containers.rs
 │   │           ├── invites.rs
@@ -154,57 +155,124 @@ backend/
   mixing schemes on already-applied files would break the per-migration
   checksum sqlx stores.
 
-**In progress — auth layer** (`better-auth` crate integration; see
-`docs/architecture/auth_layer_guide.md` for the file-by-file build
-order):
-- `AppConfig` now carries `database_url`, `auth_secret`, `base_url`,
+**Built — auth layer, working end-to-end** (`better-auth` crate
+integration; see `docs/architecture/auth_layer_guide.md` for the
+file-by-file build order and rationale behind each piece):
+- `AppConfig` carries `database_url`, `auth_secret`, `base_url`,
   `frontend_allow_origins: Vec<String>` (comma-separated
   `FRONTEND_ALLOW_ORIGINS` env var — a list because one backend can
-  serve multiple frontends: prod, preview deploys, local dev — not a
-  single hardcoded origin).
-- `AppState` opens a `PgPool` and builds `Arc<BetterAuth<SqlxAdapter>>`
-  via `AuthBuilder` with `EmailPasswordPlugin` + `SessionManagementPlugin`.
-  CORS in `router.rs` is now built from `frontend_allow_origins`
-  instead of a hardcoded origin, and better-auth's own routes are
-  mounted at `/auth` via `.nest("/auth", state.auth.clone().axum_router())`.
-- Still missing: `ContainerAccess<Role>` extractor, `domain::Role`,
-  `routes/me.rs`, and the `extractors/` module wiring in `main.rs` —
-  the guide above has these in dependency order.
-- **Two version-specific traps in `better-auth 0.10.0` worth knowing
-  before touching this again:**
-  1. `HookedDatabaseAdapter<DB>` (the documented way to attach
-     `DatabaseHooks`, e.g. for invite-resolution-on-signup) does not
-     compile in this version — it implements every `*Ops` trait except
-     `PasskeyOps`, so it can never satisfy `DatabaseAdapter`'s full
-     bound. `AuthBuilder::hook(...)` also hard-errors at `.build()` if
-     used directly. Confirmed against the crate's own vendored source;
-     upstream's `master` branch has since removed
-     `HookedDatabaseAdapter` from `hooks.rs` entirely (there's a
-     `1.0.0-alpha.2` published after 0.10.0), so this was a known gap
-     that got reworked, not something to retry differently. Until the
-     crate is upgraded, `AppDb = SqlxAdapter` (unwrapped), and any
-     signup-time logic (like invite resolution) has to be called
-     explicitly from a custom signup endpoint instead of a
-     `DatabaseHooks` callback.
-  2. Custom `impl FromRequestParts<AppState>` extractors (`AuthUser`,
-     `MaybeUser`, `ContainerAccess<R>`) must **not** import
-     `axum::async_trait` or use `#[async_trait]` — that re-export
-     doesn't exist in `axum 0.8.9`; `FromRequestParts` is a native
-     `async fn`-returning trait now. (Unrelated: better-auth-core's own
-     `DatabaseHooks` trait *does* need the separate `async-trait` crate
-     — that one's a real dependency, add it to `api/Cargo.toml` if you
-     implement `DatabaseHooks`.)
+  serve multiple frontends, not a single hardcoded origin).
+- `AppState` opens a `PgPool`, builds `Arc<BetterAuth<SqlxAdapter>>` via
+  `AuthBuilder` with `EmailPasswordPlugin` + `SessionManagementPlugin`,
+  and holds a `moka::future::Cache<(container_id, user_id), Role>` for
+  `ContainerAccess` to check before hitting Postgres.
+- `router.rs` mounts better-auth's real routes at `/auth` (session
+  state resolved via a second `.with_state(...)` call before
+  `.nest()` — see the code comment for why that's required, not
+  optional), CORS built from `frontend_allow_origins`.
+- `extractors/auth_user.rs` — `AuthUser` bridges better-auth's
+  `CurrentSession<AppDb>` (which needs `State<Arc<BetterAuth<AppDb>>>`)
+  into something usable as a normal `AppState`-based extractor.
+  Carries `id, name, email, email_verified, image, username, banned,
+  ban_reason, ban_expires` — deliberately not the full 15-column
+  `users` table shape (dropped `display_username`, better-auth's own
+  `role` field, `two_factor_enabled` — none of those are used).
+  `username` is update-only (via better-auth's built-in
+  `POST /auth/update-user`), never asked at signup. `MaybeUser` exists
+  for future optional-auth routes, not used yet.
+- `extractors/container_access.rs` — `ContainerAccess<Viewer/Editor/Owner>`
+  is fully implemented (role lookup + moka cache + `role_meets_minimum`
+  check), but **no route uses it yet** — there are no container routes
+  to protect yet. Wire it in when `routes/containers.rs` etc. get built.
+- `domain/container.rs` — `Role` enum + `role_meets_minimum`, unit
+  tested (`cargo test -p domain`).
+- `routes/me.rs` — `GET /me`, the one route that actually uses
+  `AuthUser` today. Verified live: sign-up → sign-in → `/me` with the
+  returned token all work against a real local Postgres.
+- `routes/auth.rs` — **documentation-only** utoipa wrapper for
+  better-auth's real `/auth/sign-up/email`, `/auth/sign-in/email`,
+  `/auth/sign-out`, `/auth/get-session`. These functions are never
+  mounted as routes (that'd double-register the same path and panic at
+  startup) — they exist only so `ApiDoc`'s
+  `#[openapi(paths(...), components(schemas(...)))]` in `router.rs`
+  picks them up, so Swagger/orval know these endpoints exist. The DTOs
+  in this file (`AuthUserDto`, etc.) mirror better-auth's *real* wire
+  format field-for-field — don't trim them to match `/me`'s shape,
+  they document a different, fixed-by-the-crate response.
+  If you wrap more better-auth endpoints later, follow this exact
+  pattern (stub fn + `#[utoipa::path]` + list in `ApiDoc`, never a real
+  route).
+- `auth_hooks.rs` — `AppAuthHooks` + a `DatabaseHooks<SqlxAdapter>` impl
+  for invite resolution on signup, written but **not wired to
+  anything** — see trap #1 below for why, and "Next up" for the actual
+  plan.
+
+**Two version-specific traps in `better-auth 0.10.0` worth knowing
+before touching this again:**
+1. `HookedDatabaseAdapter<DB>` (the documented way to attach
+   `DatabaseHooks`) does not compile in this version — it implements
+   every `*Ops` trait except `PasskeyOps`, so it can never satisfy
+   `DatabaseAdapter`'s full bound. `AuthBuilder::hook(...)` also
+   hard-errors at `.build()` if used directly. Confirmed against the
+   crate's own vendored source; upstream's `master` branch has since
+   removed `HookedDatabaseAdapter` from `hooks.rs` entirely (there's a
+   `1.0.0-alpha.2` published after 0.10.0), so this was a known gap
+   that got reworked, not something to retry differently.
+   `AuthConfig::disabled_path(...)` doesn't help either — it's checked
+   inside `handle_request_inner` too, so disabling a path blocks it
+   everywhere, not just axum's route registration; there's no way to
+   selectively "unmount but still dispatch" one better-auth route in
+   this version. Until the crate is upgraded, `AppDb = SqlxAdapter`
+   (unwrapped), and any signup-time logic has to be called explicitly
+   by us instead of via a `DatabaseHooks` callback.
+2. Custom `impl FromRequestParts<AppState>` extractors must **not**
+   import `axum::async_trait` or use `#[async_trait]` — that re-export
+   doesn't exist in `axum 0.8.9`; `FromRequestParts` is a native
+   `async fn`-returning trait now. (Unrelated: better-auth-core's own
+   `DatabaseHooks` trait *does* need the separate `async-trait` crate —
+   add it to `api/Cargo.toml` if you implement `DatabaseHooks`.)
+3. `BetterAuth<DB>::handle_request(&self, req: AuthRequest) -> AuthResult<AuthResponse>`
+   is a public, framework-agnostic dispatch entry point — it runs a
+   plugin's real logic (password hashing, session creation, etc.)
+   without going through the axum router at all. This is the tool for
+   "call better-auth's real signup logic from our own custom endpoint"
+   (needed for invite signup — see "Next up"), confirmed to exist and
+   work; not yet used anywhere in this codebase.
+
+**Next up — invite-only signup** (design confirmed, not yet
+implemented):
+- Two signup shapes: **direct** (`email, password` — already works,
+  unchanged) and **invite** (`invite_token, email, password, name`).
+  The invite token is the only thing that determines `container_id` +
+  `role` — deliberately **not** accepted as plain client-supplied
+  fields, since that would let any client self-assign to any container
+  with any role. The server decrypts the AES-GCM token (see "Design
+  decisions" below) to get the real values.
+- Plan: a new endpoint (not better-auth's own `/auth/sign-up/email`)
+  that decrypts the token, checks the request's `email` matches the
+  token's invited email, calls `state.auth.handle_request(...)` (trap
+  #3 above) to actually create the account via better-auth's real
+  logic, then in the same transaction inserts `container_member` and
+  marks the `invite` row `accepted_at`.
+- Separately: an already-registered user who gets invited later should
+  have it "resolve on next login" per the design doc — planned as an
+  opportunistic check inside `extractors/auth_user.rs` (every
+  authenticated request already has the verified email in hand), not
+  as a hook into better-auth's sign-in route.
+- The logic already written in `auth_hooks.rs`'s `after_create_user`
+  is the right shape for "find pending invites for this email, resolve
+  them" — reuse it as a plain function called from both the new signup
+  endpoint and the login-time check, rather than duplicating it.
 
 **Not yet built** (all decided in design discussion, none implemented):
 - `storage` crate (sqlx repos) and `r2` crate (presigned URLs) — folders
   don't exist yet; `Cargo.toml`'s `members = ["crates/*"]` will pick
   them up automatically once added, no workspace file change needed
 - Database connection / `GET /readyz`
-- Containers, invites/allow-list, members, media routes — see the
-  route list and request-flow docs (if present in `docs/`) for the
-  full planned surface
-- moka role cache (planned addition to `AppState` + `ContainerAccess`,
-  once that extractor exists — see the auth guide's "revisit" section)
+- Containers, members, media routes — see the route list and
+  request-flow docs (if present in `docs/`) for the full planned
+  surface. This is also when `ContainerAccess<Role>` (already written)
+  finally gets used.
 ## Design decisions already made (don't re-litigate these)
 
 - **Single owner per container, with transfer** — not multiple owners.
@@ -242,9 +310,11 @@ postgres` from `infra/`), copy `.env.example` to `.env` and fill in
 ## When you add a new route
 
 1. Does it need auth? Use the `AuthUser` or `MaybeUser` extractor
-   (once built) — don't hand-roll header parsing in the handler.
-2. Does it touch a container? Use `ContainerAccess<Role>` (once
-   built) — don't write a bespoke role check.
+   (`api/src/extractors/auth_user.rs`) — don't hand-roll header parsing
+   in the handler.
+2. Does it touch a container? Use `ContainerAccess<Viewer/Editor/Owner>`
+   (`api/src/extractors/container_access.rs`) — don't write a bespoke
+   role check. This will be the first route that actually uses it.
 3. Business rule (quota, role comparison, lock override)? It goes in
    `domain`, called from the handler — not written inline in
    `api/src/routes/`.

@@ -8,8 +8,14 @@ use crate::{extractors::auth_user::AuthUser, state::AppState};
 #[derive(Serialize, ToSchema)]
 struct MeResponse {
     id: String,
-    email: Option<String>,
     name: Option<String>,
+    email: Option<String>,
+    email_verified: bool,
+    image: Option<String>,
+    username: Option<String>,
+    banned: bool,
+    ban_reason: Option<String>,
+    ban_expires: Option<String>,
 }
 
 #[utoipa::path(
@@ -21,8 +27,14 @@ struct MeResponse {
 async fn get_me(user: AuthUser) -> impl IntoResponse {
     Json(MeResponse {
         id: user.id,
-        email: user.email,
         name: user.name,
+        email: user.email,
+        email_verified: user.email_verified,
+        image: user.image,
+        username: user.username,
+        banned: user.banned,
+        ban_reason: user.ban_reason,
+        ban_expires: user.ban_expires,
     })
 }
 
