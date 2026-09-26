@@ -7,6 +7,7 @@ use crate::{config::AppConfig, router::build_router, state::AppState};
 
 mod config;
 mod extractors;
+mod middleware;
 mod router;
 mod routes;
 mod state;
@@ -33,9 +34,15 @@ async fn main() {
         .expect("Failed to bind to port");
 
     tracing::info!("SERVER RUNNING AT http://{addr}");
-    axum::serve(listener, app)
-        .await
-        .expect("Failed to start the server.");
+    // `with_connect_info` (not plain `into_make_service()`) is required —
+    // the rate limiter's PeerIpKeyExtractor reads the peer's SocketAddr
+    // from request extensions, which only this variant populates.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Failed to start the server.");
 }
 
 fn init_tracing() {

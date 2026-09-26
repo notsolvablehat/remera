@@ -1,4 +1,4 @@
-use crate::{routes, state::AppState};
+use crate::{middleware::rate_limit, routes, state::AppState};
 use axum::Router;
 use better_auth::AxumIntegration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -68,5 +68,11 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/auth", auth_router)
         .merge(SwaggerUi::new("/docs").url("/openapi.json", api))
         .layer(cors)
+        // Outermost layer — runs before everything else, including CORS
+        // and auth extraction, so an abusive client gets rate-limited
+        // before it can make the request do any real work. Requires the
+        // server to be bound via `into_make_service_with_connect_info`
+        // (see main.rs) or PeerIpKeyExtractor has no IP to key on.
+        .layer(rate_limit::layer())
         .with_state(state)
 }

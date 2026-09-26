@@ -141,6 +141,7 @@ dependencies = [
  "better-auth",
  "domain",
  "dotenvy",
+ "governor",
  "jsonwebtoken 11.1.0",
  "moka",
  "r2",

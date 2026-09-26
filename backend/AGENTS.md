@@ -355,6 +355,42 @@ built; kept here only so nobody re-reads it as current):
 - Frontend client regenerated — `Media` tag now has its own folder
   under `src/lib/api/`.
 
+**Built — rate limiting:**
+- `middleware/rate_limit.rs` (new — `middleware/` didn't exist before)
+  builds a `tower_governor` `GovernorLayer` using the default
+  `PeerIpKeyExtractor`: one flat global-per-IP limit for every route
+  (30-request burst, replenishing 1/second), plus a spawned background
+  task calling the limiter's `retain_recent()` every 60s — without it,
+  the in-memory per-IP state map grows forever, since it never forgets
+  an IP on its own.
+- Applied in `router.rs` as the **outermost** layer (added last, so it
+  runs first on every inbound request) — before CORS, before auth
+  extraction, before it can touch the DB. This matches the layering
+  order described in
+  `docs/architecture/howisthebackendstructured-1.md`'s "Summary of the
+  access-control shape" (`RequestId → rate limit → auth → ...`).
+  Wraps the nested `/auth/*` router too, not just this crate's own
+  routes — signup/login are exactly the endpoints most worth rate
+  limiting.
+  `.use_headers()` is on, so responses (including the `429` itself)
+  carry `x-ratelimit-limit`/`-remaining` and `retry-after` — required
+  the `governor` crate as a direct dependency (not just `tower_governor`
+  re-exporting it) to name `StateInformationMiddleware` in
+  `layer()`'s return type.
+- `main.rs` now serves via
+  `app.into_make_service_with_connect_info::<SocketAddr>()` instead of
+  plain `into_make_service()` — required for `PeerIpKeyExtractor` to
+  have a `SocketAddr` to key on at all; without this change every
+  request would hit `GovernorError::UnableToExtractKey`.
+- Deliberately one flat limit, not per-route: fine-tuning (e.g. a
+  stricter limit specifically on `/auth/sign-up/email` to slow
+  credential-stuffing, a looser one for authenticated `GET` traffic)
+  is real future work, not done here — see "Next up".
+- Verified live: fired 40 rapid requests at `/healthz` from one IP —
+  first 30 succeeded, the rest got `429` with the expected headers;
+  waited for one token to replenish and a request succeeded again;
+  confirmed normal single-request traffic (signup, etc.) is unaffected.
+
 **Next up — in priority order** (see
 `docs/architecture/howisthebackendstructured-1.md` for full route
 specs and request-flow traces for all of these):
@@ -380,8 +416,10 @@ specs and request-flow traces for all of these):
 5. **Operational readiness**:
    - `GET /readyz` (DB-ping readiness probe) — doesn't exist; nothing
      currently tells an orchestrator when it's safe to route traffic.
-   - `tower_governor` is a dependency but never actually layered onto
-     the router — no rate limiting is active on any route yet.
+   - Per-route rate-limit tuning — one flat global limit exists now
+     (see "Built — rate limiting" above); splitting it into stricter
+     limits for specific routes (signup/login especially) is still
+     open.
    - `middleware/request_id.rs` (planned in the workspace layout above)
      doesn't exist — no request-id propagation in logs yet.
    - Integration tests (`backend/tests/`) don't exist at all — every
